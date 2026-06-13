@@ -2,7 +2,7 @@
 
 DOMAIN = "ha_ems"
 NAME = "Home Energy Management System"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 # Config entry keys — entity IDs provided by the user during setup
 CONF_SOLAR_POWER = "solar_power_sensor"           # W, positive = producing
