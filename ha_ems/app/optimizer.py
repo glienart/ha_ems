@@ -21,11 +21,19 @@ from dataclasses import dataclass, field
 from datetime import datetime, time
 from typing import Optional
 
-from .const import (
-    BAT_CHARGE, BAT_DISCHARGE, BAT_STANDBY, BAT_IDLE,
-    EV_CHARGE, EV_PAUSE,
-    MODE_AUTO, MODE_ECO, MODE_CHEAP, MODE_OFF,
-)
+# Constants (inlined -- no separate const module in add-on)
+BAT_CHARGE = "charge"
+BAT_DISCHARGE = "discharge"
+BAT_STANDBY = "standby"
+BAT_IDLE = "idle"
+EV_CHARGE = "charge"
+EV_PAUSE = "pause"
+MODE_AUTO = "auto"
+MODE_ECO = "eco"
+MODE_CHEAP = "cheap"
+MODE_OFF = "off"
+MODE_MANUAL = "manual"
+
 
 _LOGGER = logging.getLogger(__name__)
 

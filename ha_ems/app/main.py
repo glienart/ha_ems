@@ -354,7 +354,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <div class="updated" id="updated"></div>
 
 <script>
-const BASE = window.location.pathname.replace(/\/$/, "");
+const BASE = window.location.pathname.replace(/[/]$/, "");
 
 function badge(val, map) {
   const cfg = map[val] || { cls: "badge-gray", label: val || "--" };
