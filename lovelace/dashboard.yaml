@@ -1,0 +1,58 @@
+# HA EMS -- Lovelace Dashboard
+# Paste this in Settings > Dashboards > Add Dashboard > YAML mode
+# or add it as a new view in an existing dashboard.
+#
+# Prerequisites: the ha_ems add-on must be running so the
+# sensor.ha_ems_* entities exist in HA.
+
+title: Energy Management
+views:
+  - title: EMS
+    icon: mdi:solar-power-variant
+    cards:
+
+      # --- EMS Status ---
+      - type: entities
+        title: EMS Control
+        entities:
+          - entity: sensor.ha_ems_mode
+            name: Mode
+            icon: mdi:tune
+          - entity: sensor.ha_ems_battery_decision
+            name: Battery decision
+            icon: mdi:battery-charging
+          - entity: sensor.ha_ems_ev_decision
+            name: EV decision
+            icon: mdi:car-electric
+          - entity: sensor.ha_ems_reason
+            name: Last reason
+            icon: mdi:information-outline
+
+      # --- Live power flow ---
+      - type: glance
+        title: Power Flow
+        columns: 3
+        entities:
+          - entity: sensor.ha_ems_solar_surplus
+            name: Solar Surplus
+            icon: mdi:solar-power
+          - entity: sensor.ha_ems_mode
+            name: Mode
+
+      # --- History graphs (replace entity IDs with your actual sensors) ---
+      - type: history-graph
+        title: Solar & Grid (last 24h)
+        hours_to_show: 24
+        entities:
+          - entity: sensor.ha_ems_solar_surplus
+            name: Solar Surplus
+          # - entity: sensor.your_solar_power_sensor
+          # - entity: sensor.your_grid_power_sensor
+
+      - type: history-graph
+        title: Battery SOC (last 24h)
+        hours_to_show: 24
+        entities:
+          # - entity: sensor.your_battery_soc_sensor
+          - entity: sensor.ha_ems_battery_decision
+            name: Battery Decision
