@@ -251,6 +251,38 @@ async def dashboard():
     return HTMLResponse(DASHBOARD_HTML)
 
 
+
+@app.get("/api/entities")
+async def api_entities(device_class: str = ""):
+    """Return all HA entity IDs, optionally filtered by device_class."""
+    url = f"{ha_client.HA_API}/states"
+    try:
+        async with __import__("httpx").AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers=ha_client._headers())
+            if r.status_code != 200:
+                return JSONResponse({"entities": []})
+            states = r.json()
+        entities = []
+        for s in states:
+            eid = s.get("entity_id", "")
+            attrs = s.get("attributes", {})
+            dc = attrs.get("device_class", "")
+            if device_class and dc != device_class:
+                continue
+            entities.append({
+                "entity_id": eid,
+                "friendly_name": attrs.get("friendly_name", eid),
+                "state": s.get("state", ""),
+                "device_class": dc,
+                "unit": attrs.get("unit_of_measurement", ""),
+            })
+        entities.sort(key=lambda x: x["entity_id"])
+        return JSONResponse({"entities": entities})
+    except Exception as exc:
+        _LOGGER.error("api_entities error: %s", exc)
+        return JSONResponse({"entities": []})
+
+
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -259,150 +291,234 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <title>Home Energy Management System</title>
 <style>
   :root {
-    --bg: #111827; --card: #1f2937; --border: #374151;
-    --text: #f9fafb; --muted: #9ca3af;
-    --green: #10b981; --yellow: #f59e0b; --red: #ef4444; --blue: #3b82f6;
+    --bg:#111827;--card:#1f2937;--border:#374151;
+    --text:#f9fafb;--muted:#9ca3af;
+    --green:#10b981;--yellow:#f59e0b;--red:#ef4444;--blue:#3b82f6;
+    --accent:#10b981;
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; padding: 1rem; }
-  h1 { font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem; display: flex; align-items: center; gap: .5rem; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .75rem; margin-bottom: 1rem; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: .75rem; padding: 1rem; }
-  .card-label { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: .25rem; }
-  .card-value { font-size: 1.5rem; font-weight: 700; }
-  .card-sub { font-size: .75rem; color: var(--muted); margin-top: .25rem; }
-  .badge { display: inline-block; padding: .2rem .6rem; border-radius: 9999px; font-size: .75rem; font-weight: 600; }
-  .badge-green { background: #064e3b; color: var(--green); }
-  .badge-yellow { background: #78350f; color: var(--yellow); }
-  .badge-red { background: #7f1d1d; color: var(--red); }
-  .badge-blue { background: #1e3a5f; color: var(--blue); }
-  .badge-gray { background: var(--border); color: var(--muted); }
-  .mode-bar { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
-  .mode-btn { padding: .4rem .9rem; border-radius: .5rem; border: 1px solid var(--border); background: var(--card); color: var(--muted); cursor: pointer; font-size: .85rem; transition: all .15s; }
-  .mode-btn.active { border-color: var(--green); color: var(--green); background: #064e3b; }
-  .reason-card { background: var(--card); border: 1px solid var(--border); border-radius: .75rem; padding: 1rem; margin-bottom: 1rem; }
-  .reason-card p { font-size: .85rem; color: var(--muted); }
-  .section-title { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: .5rem; }
-  .updated { font-size: .7rem; color: var(--border); text-align: right; margin-top: .5rem; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; display: inline-block; }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;padding:1rem}
+  /* Nav */
+  nav{display:flex;gap:.5rem;margin-bottom:1.25rem;border-bottom:1px solid var(--border);padding-bottom:.75rem}
+  .nav-btn{padding:.35rem .85rem;border-radius:.5rem;border:1px solid transparent;background:none;color:var(--muted);cursor:pointer;font-size:.85rem}
+  .nav-btn.active{background:var(--card);border-color:var(--border);color:var(--text)}
+  /* Cards */
+  .page{display:none}.page.active{display:block}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem;margin-bottom:1rem}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:.75rem;padding:1rem}
+  .card-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:.25rem}
+  .card-value{font-size:1.5rem;font-weight:700}
+  .card-sub{font-size:.75rem;color:var(--muted);margin-top:.25rem}
+  .badge{display:inline-block;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600}
+  .badge-green{background:#064e3b;color:var(--green)}
+  .badge-yellow{background:#78350f;color:var(--yellow)}
+  .badge-blue{background:#1e3a5f;color:var(--blue)}
+  .badge-gray{background:var(--border);color:var(--muted)}
+  .mode-bar{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem}
+  .mode-btn{padding:.4rem .9rem;border-radius:.5rem;border:1px solid var(--border);background:var(--card);color:var(--muted);cursor:pointer;font-size:.85rem}
+  .mode-btn.active{border-color:var(--green);color:var(--green);background:#064e3b}
+  .reason-card{background:var(--card);border:1px solid var(--border);border-radius:.75rem;padding:1rem;margin-bottom:1rem}
+  .reason-card p{font-size:.85rem;color:var(--muted)}
+  .section-title{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:.5rem;margin-top:.75rem}
+  .updated{font-size:.7rem;color:var(--border);text-align:right;margin-top:.5rem}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 2s infinite;display:inline-block}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  h1{font-size:1.2rem;font-weight:600;margin-bottom:1rem;display:flex;align-items:center;gap:.5rem}
+  /* Settings */
+  .settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem;margin-bottom:1rem}
+  .settings-group{background:var(--card);border:1px solid var(--border);border-radius:.75rem;padding:1rem}
+  .settings-group h3{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:.75rem}
+  .field{margin-bottom:.6rem}
+  .field label{display:block;font-size:.78rem;color:var(--muted);margin-bottom:.2rem}
+  .field select,.field input{width:100%;background:#111827;border:1px solid var(--border);color:var(--text);padding:.4rem .6rem;border-radius:.4rem;font-size:.82rem}
+  .field select:focus,.field input:focus{outline:none;border-color:var(--accent)}
+  .save-btn{background:var(--accent);color:#fff;border:none;padding:.5rem 1.25rem;border-radius:.5rem;cursor:pointer;font-size:.85rem;font-weight:600;margin-top:.5rem}
+  .save-btn:hover{opacity:.9}
+  .toast{position:fixed;bottom:1rem;right:1rem;background:var(--accent);color:#fff;padding:.5rem 1rem;border-radius:.5rem;font-size:.85rem;display:none}
 </style>
 </head>
 <body>
-<h1><span class="dot"></span> EMS Dashboard</h1>
+<h1><span class="dot"></span> HA EMS</h1>
 
-<div class="section-title">Mode</div>
-<div class="mode-bar" id="modeBar">
-  <button class="mode-btn" data-mode="auto">Auto</button>
-  <button class="mode-btn" data-mode="eco">Eco</button>
-  <button class="mode-btn" data-mode="cheap">Cheap</button>
-  <button class="mode-btn" data-mode="manual">Manual</button>
-  <button class="mode-btn" data-mode="off">Off</button>
+<nav>
+  <button class="nav-btn active" onclick="showPage('dashboard',this)">Dashboard</button>
+  <button class="nav-btn" onclick="showPage('settings',this)">Settings</button>
+</nav>
+
+<!-- DASHBOARD PAGE -->
+<div id="page-dashboard" class="page active">
+  <div class="section-title">Mode</div>
+  <div class="mode-bar" id="modeBar">
+    <button class="mode-btn" data-mode="auto">Auto</button>
+    <button class="mode-btn" data-mode="eco">Eco</button>
+    <button class="mode-btn" data-mode="cheap">Cheap</button>
+    <button class="mode-btn" data-mode="manual">Manual</button>
+    <button class="mode-btn" data-mode="off">Off</button>
+  </div>
+  <div class="section-title">Live readings</div>
+  <div class="grid">
+    <div class="card"><div class="card-label">Solar</div><div class="card-value" id="solar">--</div><div class="card-sub">W production</div></div>
+    <div class="card"><div class="card-label">Grid</div><div class="card-value" id="grid">--</div><div class="card-sub">W (+ import)</div></div>
+    <div class="card"><div class="card-label">Solar surplus</div><div class="card-value" id="surplus">--</div><div class="card-sub">W available</div></div>
+    <div class="card"><div class="card-label">Battery SOC</div><div class="card-value" id="batSoc">--</div><div class="card-sub">%</div></div>
+    <div class="card"><div class="card-label">EV SOC</div><div class="card-value" id="evSoc">--</div><div class="card-sub">%</div></div>
+    <div class="card"><div class="card-label">Tariff</div><div class="card-value" id="tariff">--</div><div class="card-sub">EUR/kWh</div></div>
+  </div>
+  <div class="section-title">Decisions</div>
+  <div class="grid">
+    <div class="card"><div class="card-label">Battery</div><div id="batDecision"><span class="badge badge-gray">--</span></div></div>
+    <div class="card"><div class="card-label">EV Charger</div><div id="evDecision"><span class="badge badge-gray">--</span></div></div>
+  </div>
+  <div class="reason-card"><div class="card-label">Last decision reason</div><p id="reason">--</p></div>
+  <div class="updated" id="updated"></div>
 </div>
 
-<div class="section-title">Live readings</div>
-<div class="grid">
-  <div class="card">
-    <div class="card-label">Solar</div>
-    <div class="card-value" id="solar">--</div>
-    <div class="card-sub">W production</div>
+<!-- SETTINGS PAGE -->
+<div id="page-settings" class="page">
+  <div class="settings-grid">
+    <div class="settings-group">
+      <h3>Power sensors</h3>
+      <div class="field"><label>Solar production (W)</label><select id="s_solar_power_sensor"><option value="">Loading...</option></select></div>
+      <div class="field"><label>Grid power (W, + = import)</label><select id="s_grid_power_sensor"><option value="">Loading...</option></select></div>
+      <div class="field"><label>House consumption (W, optional)</label><select id="s_house_power_sensor"><option value="">Loading...</option></select></div>
+    </div>
+    <div class="settings-group">
+      <h3>Battery</h3>
+      <div class="field"><label>Battery SOC (%)</label><select id="s_battery_soc_sensor"><option value="">Loading...</option></select></div>
+      <div class="field"><label>Charge switch</label><select id="s_battery_charge_switch"><option value="">Loading...</option></select></div>
+      <div class="field"><label>Discharge switch</label><select id="s_battery_discharge_switch"><option value="">Loading...</option></select></div>
+      <div class="field"><label>Standby switch (optional)</label><select id="s_battery_standby_switch"><option value="">Loading...</option></select></div>
+      <div class="field"><label>Max charge power (W)</label><input type="number" id="s_battery_max_charge_w" min="100" max="20000"></div>
+      <div class="field"><label>Max discharge power (W)</label><input type="number" id="s_battery_max_discharge_w" min="100" max="20000"></div>
+      <div class="field"><label>Min SOC (%)</label><input type="number" id="s_battery_min_soc" min="0" max="50"></div>
+      <div class="field"><label>Max SOC (%)</label><input type="number" id="s_battery_max_soc" min="50" max="100"></div>
+    </div>
+    <div class="settings-group">
+      <h3>EV Charger</h3>
+      <div class="field"><label>Charger switch (optional)</label><select id="s_ev_charger_switch"><option value="">Loading...</option></select></div>
+      <div class="field"><label>EV SOC sensor (optional)</label><select id="s_ev_soc_sensor"><option value="">Loading...</option></select></div>
+      <div class="field"><label>Target SOC (%)</label><input type="number" id="s_ev_target_soc" min="20" max="100"></div>
+      <div class="field"><label>Departure time (HH:MM)</label><input type="time" id="s_ev_departure_time"></div>
+      <div class="field"><label>Max charge power (W)</label><input type="number" id="s_ev_max_charge_w" min="1000" max="22000"></div>
+    </div>
+    <div class="settings-group">
+      <h3>Tariff</h3>
+      <div class="field"><label>Price sensor (EUR/kWh, optional)</label><select id="s_tariff_sensor"><option value="">Loading...</option></select></div>
+      <div class="field"><label>Cheap threshold (EUR/kWh)</label><input type="number" id="s_cheap_threshold" step="0.01" min="0" max="1"></div>
+      <div class="field"><label>Expensive threshold (EUR/kWh)</label><input type="number" id="s_expensive_threshold" step="0.01" min="0" max="1"></div>
+      <div class="field"><label>Update interval (s)</label><input type="number" id="s_update_interval" min="10" max="3600"></div>
+    </div>
   </div>
-  <div class="card">
-    <div class="card-label">Grid</div>
-    <div class="card-value" id="grid">--</div>
-    <div class="card-sub">W (+ import)</div>
-  </div>
-  <div class="card">
-    <div class="card-label">Solar surplus</div>
-    <div class="card-value" id="surplus">--</div>
-    <div class="card-sub">W available</div>
-  </div>
-  <div class="card">
-    <div class="card-label">Battery SOC</div>
-    <div class="card-value" id="batSoc">--</div>
-    <div class="card-sub">%</div>
-  </div>
-  <div class="card">
-    <div class="card-label">EV SOC</div>
-    <div class="card-value" id="evSoc">--</div>
-    <div class="card-sub">%</div>
-  </div>
-  <div class="card">
-    <div class="card-label">Tariff</div>
-    <div class="card-value" id="tariff">--</div>
-    <div class="card-sub">EUR/kWh</div>
-  </div>
+  <button class="save-btn" onclick="saveSettings()">Save settings</button>
 </div>
 
-<div class="section-title">Decisions</div>
-<div class="grid">
-  <div class="card">
-    <div class="card-label">Battery</div>
-    <div id="batDecision"><span class="badge badge-gray">--</span></div>
-  </div>
-  <div class="card">
-    <div class="card-label">EV Charger</div>
-    <div id="evDecision"><span class="badge badge-gray">--</span></div>
-  </div>
-</div>
-
-<div class="reason-card">
-  <div class="card-label">Last decision reason</div>
-  <p id="reason">--</p>
-</div>
-
-<div class="updated" id="updated"></div>
+<div class="toast" id="toast">Saved!</div>
 
 <script>
 const BASE = window.location.pathname.replace(/[/]$/, "");
 
-function badge(val, map) {
-  const cfg = map[val] || { cls: "badge-gray", label: val || "--" };
-  return `<span class="badge badge-${cfg.cls}">${cfg.label}</span>`;
+function showPage(name, btn) {
+  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
+  document.getElementById("page-" + name).classList.add("active");
+  btn.classList.add("active");
+  if (name === "settings") loadSettings();
 }
 
-const BAT_MAP = {
-  charge:    { cls: "green",  label: "Charging" },
-  discharge: { cls: "yellow", label: "Discharging" },
-  standby:   { cls: "blue",   label: "Standby" },
-  idle:      { cls: "gray",   label: "Idle" },
-};
-const EV_MAP = {
-  charge: { cls: "green", label: "Charging" },
-  pause:  { cls: "gray",  label: "Paused" },
-};
+function badge(val, map) {
+  const cfg = map[val] || {cls:"gray", label: val||"--"};
+  return `<span class="badge badge-${cfg.cls}">${cfg.label}</span>`;
+}
+const BAT_MAP = {charge:{cls:"green",label:"Charging"},discharge:{cls:"yellow",label:"Discharging"},standby:{cls:"blue",label:"Standby"},idle:{cls:"gray",label:"Idle"}};
+const EV_MAP = {charge:{cls:"green",label:"Charging"},pause:{cls:"gray",label:"Paused"}};
 
 async function refresh() {
   try {
-    const r = await fetch(BASE + "/api/state");
-    const d = await r.json();
+    const d = await fetch(BASE+"/api/state").then(r=>r.json());
     document.getElementById("solar").textContent = d.solar_w ?? "--";
     document.getElementById("grid").textContent = d.grid_w ?? "--";
     document.getElementById("surplus").textContent = d.solar_surplus_w ?? "--";
-    document.getElementById("batSoc").textContent = d.battery_soc != null ? d.battery_soc + "%" : "--";
-    document.getElementById("evSoc").textContent = d.ev_soc != null ? d.ev_soc + "%" : "--";
-    document.getElementById("tariff").textContent = d.tariff != null ? d.tariff.toFixed(3) : "--";
+    document.getElementById("batSoc").textContent = d.battery_soc!=null ? d.battery_soc+"%" : "--";
+    document.getElementById("evSoc").textContent = d.ev_soc!=null ? d.ev_soc+"%" : "--";
+    document.getElementById("tariff").textContent = d.tariff!=null ? d.tariff.toFixed(3) : "--";
     document.getElementById("batDecision").innerHTML = badge(d.battery, BAT_MAP);
     document.getElementById("evDecision").innerHTML = badge(d.ev, EV_MAP);
     document.getElementById("reason").textContent = d.reason || "--";
-    document.getElementById("updated").textContent = "Updated: " + (d.updated_at || "--");
-    // Update mode buttons
-    document.querySelectorAll(".mode-btn").forEach(btn => {
-      btn.classList.toggle("active", btn.dataset.mode === d.mode);
-    });
+    document.getElementById("updated").textContent = "Updated: "+(d.updated_at||"--");
+    document.querySelectorAll(".mode-btn").forEach(b => b.classList.toggle("active", b.dataset.mode===d.mode));
   } catch(e) { console.error(e); }
 }
 
 document.querySelectorAll(".mode-btn").forEach(btn => {
   btn.addEventListener("click", async () => {
-    await fetch(BASE + "/api/mode", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: btn.dataset.mode }),
-    });
+    await fetch(BASE+"/api/mode", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:btn.dataset.mode})});
     await refresh();
   });
 });
+
+// --- Settings ---
+const SENSOR_SELECTS = ["s_solar_power_sensor","s_grid_power_sensor","s_house_power_sensor","s_battery_soc_sensor","s_tariff_sensor","s_ev_soc_sensor"];
+const SWITCH_SELECTS = ["s_battery_charge_switch","s_battery_discharge_switch","s_battery_standby_switch","s_ev_charger_switch"];
+
+function buildOptions(entities, currentVal, includeEmpty=true) {
+  let html = includeEmpty ? `<option value="">-- none --</option>` : "";
+  for (const e of entities) {
+    const sel = e.entity_id === currentVal ? "selected" : "";
+    const label = e.friendly_name !== e.entity_id ? `${e.friendly_name} (${e.entity_id})` : e.entity_id;
+    html += `<option value="${e.entity_id}" ${sel}>${label}</option>`;
+  }
+  return html;
+}
+
+async function loadSettings() {
+  const [settingsRes, sensorsRes, switchesRes] = await Promise.all([
+    fetch(BASE+"/api/settings").then(r=>r.json()),
+    fetch(BASE+"/api/entities?device_class=").then(r=>r.json()),
+    fetch(BASE+"/api/entities?device_class=").then(r=>r.json()),
+  ]);
+
+  const sensors = sensorsRes.entities.filter(e => e.entity_id.startsWith("sensor."));
+  const switches = switchesRes.entities.filter(e => e.entity_id.startsWith("switch.") || e.entity_id.startsWith("input_boolean."));
+
+  // Populate sensor dropdowns
+  for (const id of SENSOR_SELECTS) {
+    const key = id.replace("s_","");
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = buildOptions(sensors, settingsRes[key]);
+  }
+  // Populate switch dropdowns
+  for (const id of SWITCH_SELECTS) {
+    const key = id.replace("s_","");
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = buildOptions(switches, settingsRes[key]);
+  }
+  // Numeric / text inputs
+  const numFields = ["battery_max_charge_w","battery_max_discharge_w","battery_min_soc","battery_max_soc","ev_target_soc","ev_max_charge_w","cheap_threshold","expensive_threshold","update_interval","ev_departure_time"];
+  for (const key of numFields) {
+    const el = document.getElementById("s_"+key);
+    if (el && settingsRes[key] != null) el.value = settingsRes[key];
+  }
+}
+
+async function saveSettings() {
+  const body = {};
+  const allFields = [...SENSOR_SELECTS,...SWITCH_SELECTS].map(id=>id.replace("s_",""));
+  const numFields = ["battery_max_charge_w","battery_max_discharge_w","battery_min_soc","battery_max_soc","ev_target_soc","ev_max_charge_w","cheap_threshold","expensive_threshold","update_interval","ev_departure_time"];
+
+  for (const key of allFields) {
+    const el = document.getElementById("s_"+key);
+    if (el) body[key] = el.value;
+  }
+  for (const key of numFields) {
+    const el = document.getElementById("s_"+key);
+    if (el && el.value !== "") body[key] = key.includes("threshold") ? parseFloat(el.value) : (key==="ev_departure_time" ? el.value : parseInt(el.value));
+  }
+
+  await fetch(BASE+"/api/settings", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const t = document.getElementById("toast");
+  t.style.display="block";
+  setTimeout(()=>t.style.display="none", 2500);
+}
 
 refresh();
 setInterval(refresh, 10000);
