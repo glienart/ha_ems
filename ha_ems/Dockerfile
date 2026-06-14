@@ -1,19 +1,15 @@
-ARG BUILD_FROM=ghcr.io/hassio-addons/base:latest
+ARG BUILD_FROM
 FROM $BUILD_FROM
 
-# Install Python dependencies
-RUN apk add --no-cache python3 py3-pip && \
-    pip3 install --no-cache-dir --break-system-packages \
-        fastapi \
-        uvicorn \
-        httpx \
-        "pydantic>=2.0"
+# Install Python and dependencies
+RUN apk add --no-cache python3 py3-pip
 
-# Copy app
+COPY app/requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+
+# Copy application
 COPY app/ /app/
-
-# Startup script
 COPY run.sh /run.sh
-RUN chmod +x /run.sh
+RUN chmod a+x /run.sh
 
-CMD ["/run.sh"]
+CMD [ "/run.sh" ]
