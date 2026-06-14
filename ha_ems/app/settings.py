@@ -1,27 +1,28 @@
 """
-Persistent settings stored in /data/settings.json (add-on data volume).
-Falls back to defaults if the file doesn't exist yet.
+Settings loader for HA EMS add-on.
+
+HA writes the Configuration tab values to /data/options.json.
+We read from there first, then fall back to /data/settings.json
+for runtime changes (e.g. mode changes from the dashboard).
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
-from dataclasses import asdict, dataclass, field
-from typing import Optional
+from dataclasses import asdict, dataclass
 
 _LOGGER = logging.getLogger(__name__)
-SETTINGS_PATH = "/data/settings.json"
+
+OPTIONS_PATH = "/data/options.json"   # written by HA from config tab
+RUNTIME_PATH = "/data/settings.json"  # written by the app (mode, overrides)
 
 
 @dataclass
 class EmsSettings:
-    # Power sensors (entity IDs)
     solar_power_sensor: str = ""
     grid_power_sensor: str = ""
     house_power_sensor: str = ""
-
-    # Battery
     battery_soc_sensor: str = ""
     battery_charge_switch: str = ""
     battery_discharge_switch: str = ""
@@ -30,44 +31,53 @@ class EmsSettings:
     battery_max_discharge_w: int = 3000
     battery_min_soc: int = 10
     battery_max_soc: int = 95
-
-    # EV
     ev_charger_switch: str = ""
     ev_soc_sensor: str = ""
     ev_target_soc: int = 80
     ev_departure_time: str = "07:00"
     ev_max_charge_w: int = 7400
-
-    # Tariff
     tariff_sensor: str = ""
     cheap_threshold: float = 0.10
     expensive_threshold: float = 0.25
-
-    # EMS
-    mode: str = "auto"
     update_interval: int = 60
+    mode: str = "auto"
 
 
 def load() -> EmsSettings:
-    if not os.path.exists(SETTINGS_PATH):
-        return EmsSettings()
-    try:
-        with open(SETTINGS_PATH) as f:
-            data = json.load(f)
-        s = EmsSettings()
-        for k, v in data.items():
-            if hasattr(s, k):
-                setattr(s, k, v)
-        return s
-    except Exception as exc:
-        _LOGGER.error("Failed to load settings: %s", exc)
-        return EmsSettings()
+    s = EmsSettings()
+
+    # 1. Load entity config from HA options tab
+    if os.path.exists(OPTIONS_PATH):
+        try:
+            with open(OPTIONS_PATH) as f:
+                opts = json.load(f)
+            for k, v in opts.items():
+                if hasattr(s, k) and v != "":
+                    setattr(s, k, v)
+            _LOGGER.info("Loaded options from %s", OPTIONS_PATH)
+        except Exception as exc:
+            _LOGGER.error("Failed to read options.json: %s", exc)
+
+    # 2. Override with runtime settings (mode, threshold tweaks from dashboard)
+    if os.path.exists(RUNTIME_PATH):
+        try:
+            with open(RUNTIME_PATH) as f:
+                rt = json.load(f)
+            for k, v in rt.items():
+                if hasattr(s, k):
+                    setattr(s, k, v)
+        except Exception as exc:
+            _LOGGER.error("Failed to read settings.json: %s", exc)
+
+    return s
 
 
-def save(settings: EmsSettings) -> None:
+def save_runtime(settings: EmsSettings) -> None:
+    """Save only runtime-changeable fields (mode, thresholds)."""
+    runtime_keys = {"mode", "cheap_threshold", "expensive_threshold", "update_interval"}
+    data = {k: v for k, v in asdict(settings).items() if k in runtime_keys}
     try:
-        os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
-        with open(SETTINGS_PATH, "w") as f:
-            json.dump(asdict(settings), f, indent=2)
+        with open(RUNTIME_PATH, "w") as f:
+            json.dump(data, f, indent=2)
     except Exception as exc:
-        _LOGGER.error("Failed to save settings: %s", exc)
+        _LOGGER.error("Failed to save settings.json: %s", exc)

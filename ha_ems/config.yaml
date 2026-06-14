@@ -1,6 +1,6 @@
 name: "Home Energy Management System"
 description: "Solar, battery and EV charging optimizer with built-in dashboard"
-version: "0.3.3"
+version: "0.3.4"
 slug: ha_ems
 url: "https://github.com/glienart/ha_ems"
 init: false
@@ -21,5 +21,46 @@ panel_title: "EMS"
 map:
   - data:rw
 
-options: {}
-schema: {}
+options:
+  solar_power_sensor: ""
+  grid_power_sensor: ""
+  house_power_sensor: ""
+  battery_soc_sensor: ""
+  battery_charge_switch: ""
+  battery_discharge_switch: ""
+  battery_standby_switch: ""
+  battery_max_charge_w: 3000
+  battery_max_discharge_w: 3000
+  battery_min_soc: 10
+  battery_max_soc: 95
+  ev_charger_switch: ""
+  ev_soc_sensor: ""
+  ev_target_soc: 80
+  ev_departure_time: "07:00"
+  ev_max_charge_w: 7400
+  tariff_sensor: ""
+  cheap_threshold: 0.10
+  expensive_threshold: 0.25
+  update_interval: 60
+
+schema:
+  solar_power_sensor: str?
+  grid_power_sensor: str?
+  house_power_sensor: str?
+  battery_soc_sensor: str?
+  battery_charge_switch: str?
+  battery_discharge_switch: str?
+  battery_standby_switch: str?
+  battery_max_charge_w: int(100,20000)
+  battery_max_discharge_w: int(100,20000)
+  battery_min_soc: int(0,50)
+  battery_max_soc: int(50,100)
+  ev_charger_switch: str?
+  ev_soc_sensor: str?
+  ev_target_soc: int(20,100)
+  ev_departure_time: str?
+  ev_max_charge_w: int(1000,22000)
+  tariff_sensor: str?
+  cheap_threshold: float?
+  expensive_threshold: float?
+  update_interval: int(10,3600)

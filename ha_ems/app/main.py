@@ -217,7 +217,7 @@ async def api_update_settings(body: SettingsUpdate):
     for k, v in data.items():
         if hasattr(_settings, k):
             setattr(_settings, k, v)
-    settings_module.save(_settings)
+    settings_module.save_runtime(_settings)
     # Restart loop with new interval
     if _loop_task and "update_interval" in data:
         _loop_task.cancel()
@@ -237,7 +237,7 @@ async def api_set_mode(body: ModeUpdate):
     if body.mode not in valid:
         return JSONResponse({"error": f"Invalid mode. Use one of: {valid}"}, status_code=400)
     _settings.mode = body.mode
-    settings_module.save(_settings)
+    settings_module.save_runtime(_settings)
     await run_optimizer()
     return JSONResponse({"ok": True, "mode": body.mode})
 
