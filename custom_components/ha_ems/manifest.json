@@ -1,7 +1,7 @@
 {
   "domain": "ha_ems",
   "name": "Home Energy Management System",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "documentation": "https://github.com/glienart/ha_ems",
   "issue_tracker": "https://github.com/glienart/ha_ems/issues",
   "codeowners": ["@glienart"],

@@ -18,6 +18,7 @@ from .const import (
     CONF_EV_TARGET_SOC, CONF_EV_DEPARTURE_TIME, CONF_EV_MAX_CHARGE_POWER,
     CONF_TARIFF_SENSOR, CONF_CHEAP_TARIFF_THRESHOLD, CONF_EXPENSIVE_TARIFF_THRESHOLD,
     CONF_HOUSE_POWER, CONF_UPDATE_INTERVAL,
+    CONF_EPEX_ZONE, CONF_EPEX_TOKEN, EPEX_ZONES,
     DEFAULT_UPDATE_INTERVAL, DEFAULT_BATTERY_MIN_SOC, DEFAULT_BATTERY_MAX_SOC,
     DEFAULT_EV_TARGET_SOC, DEFAULT_EV_DEPARTURE_TIME,
     DEFAULT_CHEAP_THRESHOLD, DEFAULT_EXPENSIVE_THRESHOLD,
@@ -130,6 +131,29 @@ def _step4_schema():
     })
 
 
+def _step5_schema(current: dict | None = None):
+    """EPEX SPOT configuration (optional).
+
+    Leave the token blank to skip EPEX integration entirely.
+    Get a free token at: https://transparency.entsoe.eu/ → My Account → Security tokens.
+    """
+    zone_options = [
+        selector.SelectOptionDict(value=eic, label=label)
+        for label, eic in EPEX_ZONES.items()
+    ]
+    defaults = current or {}
+    return vol.Schema({
+        vol.Optional(
+            CONF_EPEX_TOKEN,
+            default=defaults.get(CONF_EPEX_TOKEN, ""),
+        ): selector.selector({"text": {"type": "password"}}),
+        vol.Optional(
+            CONF_EPEX_ZONE,
+            default=defaults.get(CONF_EPEX_ZONE, "10YBE----------2"),
+        ): selector.selector({"select": {"options": zone_options}}),
+    })
+
+
 # ---------------------------------------------------------------------------
 # Config flow
 # ---------------------------------------------------------------------------
@@ -176,10 +200,27 @@ class HAEmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Step 4 -- tariff."""
         if user_input is not None:
             self._data.update(user_input)
-            return self.async_create_entry(title=NAME, data=self._data)
+            return await self.async_step_epex()
         return self.async_show_form(
             step_id="tariff",
             data_schema=_step4_schema(),
+        )
+
+    async def async_step_epex(self, user_input=None):
+        """Step 5 -- EPEX SPOT (optional). Leave token blank to skip."""
+        if user_input is not None:
+            # Only store if a token was provided
+            token = (user_input.get(CONF_EPEX_TOKEN) or "").strip()
+            if token:
+                self._data[CONF_EPEX_TOKEN] = token
+                self._data[CONF_EPEX_ZONE]  = user_input.get(CONF_EPEX_ZONE, "10YBE----------2")
+            return self.async_create_entry(title=NAME, data=self._data)
+        return self.async_show_form(
+            step_id="epex",
+            data_schema=_step5_schema(),
+            description_placeholders={
+                "token_url": "https://transparency.entsoe.eu/"
+            },
         )
 
     @staticmethod
@@ -190,28 +231,4 @@ class HAEmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 # ---------------------------------------------------------------------------
 # Options flow (reconfigure without removing the entry)
-# ---------------------------------------------------------------------------
-
-class HAEmsOptionsFlow(config_entries.OptionsFlow):
-    """Allow reconfiguration from the UI."""
-
-    def __init__(self, config_entry):
-        self._entry = config_entry
-
-    async def async_step_init(self, user_input=None):
-        if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
-
-        current = {**self._entry.data, **self._entry.options}
-
-        schema = vol.Schema({
-            vol.Required(CONF_BATTERY_MIN_SOC, default=current.get(CONF_BATTERY_MIN_SOC, DEFAULT_BATTERY_MIN_SOC)): _num(0, 50, "%"),
-            vol.Required(CONF_BATTERY_MAX_SOC, default=current.get(CONF_BATTERY_MAX_SOC, DEFAULT_BATTERY_MAX_SOC)): _num(50, 100, "%"),
-            vol.Required(CONF_EV_TARGET_SOC, default=current.get(CONF_EV_TARGET_SOC, DEFAULT_EV_TARGET_SOC)): _num(20, 100, "%"),
-            vol.Required(CONF_EV_DEPARTURE_TIME, default=current.get(CONF_EV_DEPARTURE_TIME, DEFAULT_EV_DEPARTURE_TIME)): selector.selector({"time": {}}),
-            vol.Required(CONF_CHEAP_TARIFF_THRESHOLD, default=current.get(CONF_CHEAP_TARIFF_THRESHOLD, DEFAULT_CHEAP_THRESHOLD)): _num(0, 1, "EUR/kWh", 0.01),
-            vol.Required(CONF_EXPENSIVE_TARIFF_THRESHOLD, default=current.get(CONF_EXPENSIVE_TARIFF_THRESHOLD, DEFAULT_EXPENSIVE_THRESHOLD)): _num(0, 1, "EUR/kWh", 0.01),
-            vol.Required(CONF_UPDATE_INTERVAL, default=current.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)): _num(10, 3600, "s"),
-        })
-
-        return self.async_show_form(step_id="init", data_schema=schema)
+# ------------------------

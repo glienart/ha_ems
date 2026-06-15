@@ -18,12 +18,14 @@ from .const import (
     CONF_EV_DEPARTURE_TIME, CONF_EV_MAX_CHARGE_POWER,
     CONF_TARIFF_SENSOR, CONF_CHEAP_TARIFF_THRESHOLD, CONF_EXPENSIVE_TARIFF_THRESHOLD,
     CONF_UPDATE_INTERVAL,
+    CONF_EPEX_TOKEN, CONF_EPEX_ZONE,
     DEFAULT_UPDATE_INTERVAL,
     MODE_AUTO, CURRENT_MODE,
     BAT_CHARGE, BAT_DISCHARGE, BAT_STANDBY, BAT_IDLE,
     EV_CHARGE, EV_PAUSE,
     DECISION_BATTERY, DECISION_EV, SOLAR_SURPLUS, NET_POWER,
 )
+from .epex_coordinator import EpexCoordinator
 from .optimizer import EmsOptimizer, EmsSnapshot
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,6 +39,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = EmsCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
+
+    # Set up EPEX coordinator if a token was provided
+    cfg = {**entry.data, **entry.options}
+    epex_token = (cfg.get(CONF_EPEX_TOKEN) or "").strip()
+    epex_coordinator: EpexCoordinator | None = None
+    if epex_token:
+        epex_coordinator = EpexCoordinator(
+            hass,
+            zone=cfg.get(CONF_EPEX_ZONE, "10YBE----------2"),
+            token=epex_token,
+        )
+        await epex_coordinator.async_config_entry_first_refresh()
+        coordinator.epex = epex_coordinator
+    else:
+        coordinator.epex = None
 
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
@@ -83,6 +100,7 @@ class EmsCoordinator(DataUpdateCoordinator):
         self._cfg = cfg
         self._optimizer = EmsOptimizer()
         self._mode = MODE_AUTO  # can be changed by select entity
+        self.epex: EpexCoordinator | None = None  # set by async_setup_entry
 
     @property
     def mode(self) -> str:
@@ -149,6 +167,12 @@ class EmsCoordinator(DataUpdateCoordinator):
 
         tariff_entity = cfg.get(CONF_TARIFF_SENSOR)
         tariff = _float(tariff_entity) if tariff_entity else None
+
+        # Prefer live EPEX price over static tariff sensor
+        if self.epex is not None and self.epex.data:
+            epex_price = self.epex.data.get("current_price")
+            if epex_price is not None:
+                tariff = epex_price
 
         return EmsSnapshot(
             solar_power_w=solar_w,

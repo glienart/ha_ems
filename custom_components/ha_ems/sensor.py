@@ -13,6 +13,7 @@ from .const import (
     DECISION_BATTERY, DECISION_EV, SOLAR_SURPLUS, NET_POWER, CURRENT_MODE,
 )
 from . import EmsCoordinator
+from .epex_sensor import EPEX_SENSOR_CLASSES
 
 
 async def async_setup_entry(
@@ -21,13 +22,20 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: EmsCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([
+
+    entities = [
         EmsBatteryDecisionSensor(coordinator, entry),
         EmsEvDecisionSensor(coordinator, entry),
         EmsSolarSurplusSensor(coordinator, entry),
         EmsNetPowerSensor(coordinator, entry),
         EmsReasonSensor(coordinator, entry),
-    ])
+    ]
+
+    # Register EPEX sensors if the coordinator was initialised
+    if coordinator.epex is not None:
+        entities.extend(cls(coordinator.epex, entry) for cls in EPEX_SENSOR_CLASSES)
+
+    async_add_entities(entities)
 
 
 def _device_info(entry: ConfigEntry) -> DeviceInfo:
@@ -85,10 +93,4 @@ class EmsNetPowerSensor(_EmsBaseSensor):
         self._attr_native_unit_of_measurement = "W"
         self._attr_device_class = SensorDeviceClass.POWER
         self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_icon = "mdi:transmission-tower"
-
-
-class EmsReasonSensor(_EmsBaseSensor):
-    def __init__(self, coordinator, entry):
-        super().__init__(coordinator, entry, "reason", "Last Decision Reason")
-        self._attr_icon = "mdi:information-outline"
+        se
