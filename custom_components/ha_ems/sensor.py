@@ -93,4 +93,10 @@ class EmsNetPowerSensor(_EmsBaseSensor):
         self._attr_native_unit_of_measurement = "W"
         self._attr_device_class = SensorDeviceClass.POWER
         self._attr_state_class = SensorStateClass.MEASUREMENT
-        se
+        self._attr_icon = "mdi:transmission-tower"
+
+
+class EmsReasonSensor(_EmsBaseSensor):
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "reason", "Last Decision Reason")
+        self._attr_icon = "mdi:information-outline"

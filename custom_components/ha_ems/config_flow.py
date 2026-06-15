@@ -231,4 +231,36 @@ class HAEmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 # ---------------------------------------------------------------------------
 # Options flow (reconfigure without removing the entry)
-# ------------------------
+# ---------------------------------------------------------------------------
+
+class HAEmsOptionsFlow(config_entries.OptionsFlow):
+    """Allow reconfiguration from the UI."""
+
+    def __init__(self, config_entry):
+        self._entry = config_entry
+
+    async def async_step_init(self, user_input=None):
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        current = {**self._entry.data, **self._entry.options}
+
+        zone_options = [
+            selector.SelectOptionDict(value=eic, label=label)
+            for label, eic in EPEX_ZONES.items()
+        ]
+
+        schema = vol.Schema({
+            vol.Required(CONF_BATTERY_MIN_SOC, default=current.get(CONF_BATTERY_MIN_SOC, DEFAULT_BATTERY_MIN_SOC)): _num(0, 50, "%"),
+            vol.Required(CONF_BATTERY_MAX_SOC, default=current.get(CONF_BATTERY_MAX_SOC, DEFAULT_BATTERY_MAX_SOC)): _num(50, 100, "%"),
+            vol.Required(CONF_EV_TARGET_SOC, default=current.get(CONF_EV_TARGET_SOC, DEFAULT_EV_TARGET_SOC)): _num(20, 100, "%"),
+            vol.Required(CONF_EV_DEPARTURE_TIME, default=current.get(CONF_EV_DEPARTURE_TIME, DEFAULT_EV_DEPARTURE_TIME)): selector.selector({"time": {}}),
+            vol.Required(CONF_CHEAP_TARIFF_THRESHOLD, default=current.get(CONF_CHEAP_TARIFF_THRESHOLD, DEFAULT_CHEAP_THRESHOLD)): _num(0, 1, "EUR/kWh", 0.01),
+            vol.Required(CONF_EXPENSIVE_TARIFF_THRESHOLD, default=current.get(CONF_EXPENSIVE_TARIFF_THRESHOLD, DEFAULT_EXPENSIVE_THRESHOLD)): _num(0, 1, "EUR/kWh", 0.01),
+            vol.Required(CONF_UPDATE_INTERVAL, default=current.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)): _num(10, 3600, "s"),
+            # EPEX SPOT (optional — leave blank to disable)
+            vol.Optional(CONF_EPEX_TOKEN, default=current.get(CONF_EPEX_TOKEN, "")): selector.selector({"text": {"type": "password"}}),
+            vol.Optional(CONF_EPEX_ZONE,  default=current.get(CONF_EPEX_ZONE, "10YBE----------2")): selector.selector({"select": {"options": zone_options}}),
+        })
+
+        return self.async_show_form(step_id="init", data_schema=schema)

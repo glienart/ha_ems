@@ -63,3 +63,30 @@ BAT_IDLE = "idle"
 # EV decisions
 EV_CHARGE = "charge"
 EV_PAUSE = "pause"
+
+# ── EPEX SPOT / ENTSO-E ────────────────────────────────────────────────────
+CONF_EPEX_ZONE  = "epex_zone"   # ENTSO-E bidding zone EIC code
+CONF_EPEX_TOKEN = "epex_token"  # ENTSO-E security token (free — register at entsoe.eu)
+
+# EPEX SPOT bidding zones (EIC codes) — label → EIC
+EPEX_ZONES: dict[str, str] = {
+    "Belgium (BE)":                  "10YBE----------2",
+    "France (FR)":                   "10YFR-RTE------C",
+    "Germany / Luxembourg (DE-LU)":  "10Y1001A1001A63L",
+    "Netherlands (NL)":              "10YNL----------L",
+    "Austria (AT)":                  "10YAT-APG------L",
+    "Switzerland (CH)":              "10YCH-SWISSGRID4",
+    "Spain (ES)":                    "10YES-REE------0",
+    "Portugal (PT)":                 "10YPT-REN------W",
+    "Italy North (IT-North)":        "10Y1001A1001A73I",
+    "Denmark DK1 (West)":            "10YDK-1--------W",
+    "Denmark DK2 (East)":            "10YDK-2--------M",
+    "Sweden SE3":                    "10Y1001A1001A46L",
+    "Norway NO2":                    "10YNO-2--------T",
+    "Finland (FI)":                  "10YFI-1--------U",
+    "Poland (PL)":                   "10YPL-AREA-----S",
+    "Czech Republic (CZ)":           "10YCZ-CEPS-----N",
+}
+
+# Reverse map: EIC → label
+EPEX_ZONE_LABELS: dict[str, str] = {v: k for k, v in EPEX_ZONES.items()}
