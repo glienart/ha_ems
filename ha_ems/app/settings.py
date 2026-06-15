@@ -41,9 +41,9 @@ class EmsSettings:
     expensive_threshold: float = 0.25
     update_interval: int = 60
     mode: str = "auto"
-    # EPEX SPOT — leave blank to disable
+    # EPEX SPOT — configured via HA add-on Configuration tab
     epex_token: str = ""
-    epex_zone: str = "10YBE----------2"  # Belgium by default
+    epex_zone: str = "BE"  # short code: BE, FR, DE-LU, NL, AT, CH…
 
 
 def load() -> EmsSettings:

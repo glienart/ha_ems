@@ -30,6 +30,11 @@ EPEX_ZONES: dict[str, str] = {
 }
 
 
+def resolve_zone(zone: str) -> str:
+    """Accept either a short code ('BE') or a raw EIC — return EIC."""
+    return EPEX_ZONES.get(zone, zone)
+
+
 async def fetch_prices(zone_eic: str, token: str) -> dict:
     """
     Fetch day-ahead prices from ENTSO-E and return a structured dict:

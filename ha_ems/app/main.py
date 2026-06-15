@@ -22,7 +22,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from . import ha_client, settings as settings_module
-from .epex import fetch_prices
+from .epex import fetch_prices, resolve_zone
 from .optimizer import EmsOptimizer, EmsSnapshot
 from .settings import EmsSettings
 
@@ -85,7 +85,7 @@ async def epex_loop():
     global _epex_data
     while True:
         try:
-            data = await fetch_prices(_settings.epex_zone, _settings.epex_token)
+            data = await fetch_prices(resolve_zone(_settings.epex_zone), _settings.epex_token)
             if data:
                 _epex_data = data
                 await _publish_epex(data)
