@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from . import ha_client, settings as settings_module
+from .epex import fetch_prices
 from .optimizer import EmsOptimizer, EmsSnapshot
 from .settings import EmsSettings
 
@@ -36,6 +37,8 @@ _settings: EmsSettings = settings_module.load()
 _optimizer = EmsOptimizer()
 _last_state: dict = {}
 _loop_task: Optional[asyncio.Task] = None
+_epex_data: dict = {}          # latest EPEX price data
+_epex_task: Optional[asyncio.Task] = None
 
 
 # ---------------------------------------------------------------------------
@@ -44,13 +47,18 @@ _loop_task: Optional[asyncio.Task] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _loop_task
+    global _loop_task, _epex_task
     _loop_task = asyncio.create_task(ems_loop())
     _LOGGER.info("EMS optimizer loop started")
+    if _settings.epex_token:
+        _epex_task = asyncio.create_task(epex_loop())
+        _LOGGER.info("EPEX price loop started (zone %s)", _settings.epex_zone)
     yield
     if _loop_task:
         _loop_task.cancel()
-    _LOGGER.info("EMS optimizer loop stopped")
+    if _epex_task:
+        _epex_task.cancel()
+    _LOGGER.info("EMS loops stopped")
 
 
 app = FastAPI(title="HA EMS", lifespan=lifespan)
@@ -72,6 +80,77 @@ async def ems_loop():
         await asyncio.sleep(_settings.update_interval)
 
 
+async def epex_loop():
+    """Fetch EPEX prices every 15 minutes and publish to HA."""
+    global _epex_data
+    while True:
+        try:
+            data = await fetch_prices(_settings.epex_zone, _settings.epex_token)
+            if data:
+                _epex_data = data
+                await _publish_epex(data)
+                _LOGGER.info(
+                    "EPEX price updated: %.4f EUR/kWh (zone %s)",
+                    data.get("current_price") or 0,
+                    _settings.epex_zone,
+                )
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            _LOGGER.error("EPEX loop error: %s", exc)
+        await asyncio.sleep(15 * 60)  # refresh every 15 min
+
+
+async def _publish_epex(data: dict) -> None:
+    """Push EPEX prices as virtual sensors to HA."""
+    def _fmt(v):
+        return str(round(v, 4)) if v is not None else "unavailable"
+
+    sensors = {
+        "sensor.ha_ems_epex_current_price":   (data.get("current_price"),   "EPEX Current Price",    "EUR/kWh"),
+        "sensor.ha_ems_epex_next_slot_price":  (data.get("next_slot_price"), "EPEX Next Slot Price",  "EUR/kWh"),
+        "sensor.ha_ems_epex_today_min":        (data.get("today_min"),       "EPEX Today Min",        "EUR/kWh"),
+        "sensor.ha_ems_epex_today_max":        (data.get("today_max"),       "EPEX Today Max",        "EUR/kWh"),
+        "sensor.ha_ems_epex_today_avg":        (data.get("today_avg"),       "EPEX Today Avg",        "EUR/kWh"),
+        "sensor.ha_ems_epex_tomorrow_min":     (data.get("tomorrow_min"),    "EPEX Tomorrow Min",     "EUR/kWh"),
+        "sensor.ha_ems_epex_tomorrow_max":     (data.get("tomorrow_max"),    "EPEX Tomorrow Max",     "EUR/kWh"),
+    }
+    for entity_id, (value, name, unit) in sensors.items():
+        await ha_client.set_entity_state(
+            entity_id,
+            _fmt(value),
+            {
+                "friendly_name":       name,
+                "unit_of_measurement": unit,
+                "icon":                "mdi:currency-eur",
+                "device_class":        "monetary",
+                "state_class":         "measurement",
+            },
+        )
+    # Full schedule as attributes on the current price sensor
+    if data.get("prices_today"):
+        await ha_client.set_entity_state(
+            "sensor.ha_ems_epex_current_price",
+            _fmt(data.get("current_price")),
+            {
+                "friendly_name":       "EPEX Current Price",
+                "unit_of_measurement": "EUR/kWh",
+                "icon":                "mdi:currency-eur",
+                "device_class":        "monetary",
+                "state_class":         "measurement",
+                "zone":                _settings.epex_zone,
+                "slot_minutes":        data.get("slot_minutes"),
+                "today_min":           data.get("today_min"),
+                "today_max":           data.get("today_max"),
+                "today_avg":           data.get("today_avg"),
+                "tomorrow_min":        data.get("tomorrow_min"),
+                "tomorrow_max":        data.get("tomorrow_max"),
+                "prices_today":        data.get("prices_today", []),
+                "prices_tomorrow":     data.get("prices_tomorrow", []),
+            },
+        )
+
+
 async def run_optimizer():
     global _last_state
     s = _settings
@@ -84,6 +163,9 @@ async def run_optimizer():
     ev_soc = await ha_client.get_float(s.ev_soc_sensor) if s.ev_soc_sensor else None
     ev_connected = await ha_client.get_bool(s.ev_charger_switch) if s.ev_charger_switch else False
     tariff = await ha_client.get_float(s.tariff_sensor) if s.tariff_sensor else None
+    # Live EPEX price overrides static tariff sensor
+    if _epex_data and _epex_data.get("current_price") is not None:
+        tariff = _epex_data["current_price"]
 
     snap = EmsSnapshot(
         solar_power_w=solar_w,
@@ -166,6 +248,7 @@ async def run_optimizer():
         "battery_soc": round(bat_soc),
         "ev_soc": round(ev_soc) if ev_soc is not None else None,
         "tariff": tariff,
+        "epex_price": _epex_data.get("current_price") if _epex_data else None,
         "reason": decision.reason,
         "updated_at": datetime.now().isoformat(),
     }
@@ -179,6 +262,12 @@ async def run_optimizer():
 @app.get("/api/state")
 async def api_state():
     return JSONResponse(_last_state)
+
+
+@app.get("/api/epex")
+async def api_epex():
+    """Return the latest EPEX price data."""
+    return JSONResponse(_epex_data or {"error": "No EPEX data — check token and zone in settings"})
 
 
 @app.get("/api/settings")

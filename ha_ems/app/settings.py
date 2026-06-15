@@ -41,6 +41,9 @@ class EmsSettings:
     expensive_threshold: float = 0.25
     update_interval: int = 60
     mode: str = "auto"
+    # EPEX SPOT — leave blank to disable
+    epex_token: str = ""
+    epex_zone: str = "10YBE----------2"  # Belgium by default
 
 
 def load() -> EmsSettings:
