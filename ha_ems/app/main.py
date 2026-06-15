@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from . import ha_client, settings as settings_module
+from .energy_html import ENERGY_HTML
 from .epex import fetch_prices, resolve_zone
 from .optimizer import EmsOptimizer, EmsSnapshot
 from .settings import EmsSettings
@@ -340,6 +341,11 @@ async def dashboard():
     return HTMLResponse(DASHBOARD_HTML)
 
 
+@app.get("/energy", response_class=HTMLResponse)
+async def energy_dashboard():
+    return HTMLResponse(ENERGY_HTML)
+
+
 
 @app.get("/api/entities")
 async def api_entities(device_class: str = ""):
@@ -432,6 +438,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <nav>
   <button class="nav-btn active" onclick="showPage('dashboard',this)">Dashboard</button>
   <button class="nav-btn" onclick="showPage('settings',this)">Settings</button>
+  <a class="nav-btn" href="energy" style="text-decoration:none">Energy ⚡</a>
 </nav>
 
 <!-- DASHBOARD PAGE -->
