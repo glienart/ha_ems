@@ -384,12 +384,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Home Energy Management System</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   :root {
-    --bg:#111827;--card:#1f2937;--border:#374151;
-    --text:#f9fafb;--muted:#9ca3af;
+    --bg:    var(--primary-background-color,   #111827);
+    --card:  var(--card-background-color,      #1f2937);
+    --border:var(--divider-color,              #374151);
+    --text:  var(--primary-text-color,         #f9fafb);
+    --muted: var(--secondary-text-color,       #9ca3af);
+    --accent:var(--primary-color,              #10b981);
     --green:#10b981;--yellow:#f59e0b;--red:#ef4444;--blue:#3b82f6;
-    --accent:#10b981;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;padding:1rem}
@@ -425,11 +429,31 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .settings-group h3{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:.75rem}
   .field{margin-bottom:.6rem}
   .field label{display:block;font-size:.78rem;color:var(--muted);margin-bottom:.2rem}
-  .field select,.field input{width:100%;background:#111827;border:1px solid var(--border);color:var(--text);padding:.4rem .6rem;border-radius:.4rem;font-size:.82rem}
+  .field select,.field input{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:.4rem .6rem;border-radius:.4rem;font-size:.82rem}
   .field select:focus,.field input:focus{outline:none;border-color:var(--accent)}
   .save-btn{background:var(--accent);color:#fff;border:none;padding:.5rem 1.25rem;border-radius:.5rem;cursor:pointer;font-size:.85rem;font-weight:600;margin-top:.5rem}
   .save-btn:hover{opacity:.9}
   .toast{position:fixed;bottom:1rem;right:1rem;background:var(--accent);color:#fff;padding:.5rem 1rem;border-radius:.5rem;font-size:.85rem;display:none}
+  /* Energy tab */
+  .epex-pills{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;margin-bottom:.75rem}
+  .pill{background:var(--bg);border:1px solid var(--border);border-radius:.5rem;padding:.4rem .6rem;text-align:center}
+  .pill-label{font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .pill-val{font-size:.95rem;font-weight:700;margin-top:.1rem}
+  .day-toggle{display:flex;gap:.4rem}
+  .day-btn{padding:.2rem .6rem;border-radius:.4rem;border:1px solid var(--border);background:none;color:var(--muted);cursor:pointer;font-size:.75rem}
+  .day-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  .chart-wrap{position:relative;height:160px;margin-bottom:.5rem}
+  .price-table{width:100%;border-collapse:collapse;font-size:.75rem;max-height:260px;display:block;overflow-y:auto}
+  .price-table thead{display:table;width:100%}
+  .price-table tbody{display:block;max-height:220px;overflow-y:auto}
+  .price-table tr{display:table;width:100%;table-layout:fixed}
+  .price-table th{color:var(--muted);font-size:.62rem;text-transform:uppercase;padding:.25rem .4rem;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--card);z-index:1}
+  .price-table td{padding:.25rem .4rem;border-bottom:1px solid var(--border)}
+  .price-table tr.cur td{background:#0f2318;color:var(--green);font-weight:700}
+  .pbar{height:5px;border-radius:2px;margin-top:2px}
+  .energy-layout{display:grid;grid-template-columns:1fr 220px;gap:.75rem}
+  @media(max-width:700px){.energy-layout{grid-template-columns:1fr}}
+  .no-epex{font-size:.8rem;color:var(--muted);text-align:center;padding:1.5rem 0}
 </style>
 </head>
 <body>
@@ -438,7 +462,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <nav>
   <button class="nav-btn active" onclick="showPage('dashboard',this)">Dashboard</button>
   <button class="nav-btn" onclick="showPage('settings',this)">Settings</button>
-  <a class="nav-btn" href="energy" style="text-decoration:none">Energy ⚡</a>
+  <button class="nav-btn" onclick="showPage('energy',this)">Energy ⚡</button>
 </nav>
 
 <!-- DASHBOARD PAGE -->
@@ -508,10 +532,46 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <button class="save-btn" onclick="saveSettings()">Save settings</button>
 </div>
 
+<!-- ENERGY PAGE -->
+<div id="page-energy" class="page">
+  <div class="energy-layout">
+    <div>
+      <div class="card" style="margin-bottom:.75rem">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
+          <span class="card-label">EPEX SPOT</span>
+          <div class="day-toggle">
+            <button class="day-btn active" onclick="epexDay('today',this)">Today</button>
+            <button class="day-btn" id="tmrw-btn" onclick="epexDay('tomorrow',this)" style="display:none">Tomorrow</button>
+          </div>
+        </div>
+        <div class="epex-pills">
+          <div class="pill"><div class="pill-label">Now</div><div class="pill-val" style="color:var(--yellow)" id="ep-now">--</div></div>
+          <div class="pill"><div class="pill-label">Next</div><div class="pill-val" id="ep-next">--</div></div>
+          <div class="pill"><div class="pill-label">Min</div><div class="pill-val" style="color:var(--green)" id="ep-min">--</div></div>
+          <div class="pill"><div class="pill-label">Max</div><div class="pill-val" style="color:var(--red)" id="ep-max">--</div></div>
+        </div>
+        <div class="chart-wrap"><canvas id="epexChart"></canvas></div>
+        <div class="no-epex" id="no-epex" style="display:none">No EPEX data — add your ENTSO-E token in Configuration.</div>
+        <div class="updated" id="ep-zone"></div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="card-label" id="sched-title">Schedule — Today</div>
+        <table class="price-table">
+          <thead><tr><th>Time</th><th>ct/kWh</th><th></th></tr></thead>
+          <tbody id="sched-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast">Saved!</div>
 
 <script>
 const BASE = window.location.pathname.replace(/[/]$/, "");
+let _epexData = null, _epexChartInst = null, _epexDay = 'today';
 
 function showPage(name, btn) {
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
@@ -519,6 +579,7 @@ function showPage(name, btn) {
   document.getElementById("page-" + name).classList.add("active");
   btn.classList.add("active");
   if (name === "settings") loadSettings();
+  if (name === "energy" && !_epexData) loadEpex();
 }
 
 function badge(val, map) {
@@ -618,6 +679,97 @@ async function saveSettings() {
 
 refresh();
 setInterval(refresh, 10000);
+
+// ── ENERGY TAB ────────────────────────────────────────────────
+
+async function loadEpex() {
+  try { _epexData = await fetch(BASE+'/api/epex').then(r=>r.json()); } catch(e){}
+  renderEpex();
+}
+
+function ct(v) { return v != null ? (v*100).toFixed(2)+' ct' : '--'; }
+
+function renderEpex() {
+  const d = _epexData;
+  if (!d || d.error || !d.prices_today || !d.prices_today.length) {
+    document.getElementById('no-epex').style.display='block';
+    document.getElementById('epexChart').style.display='none';
+    return;
+  }
+  document.getElementById('no-epex').style.display='none';
+  document.getElementById('epexChart').style.display='block';
+  document.getElementById('ep-now').textContent  = ct(d.current_price);
+  document.getElementById('ep-next').textContent = ct(d.next_slot_price);
+  document.getElementById('ep-min').textContent  = ct(d.today_min);
+  document.getElementById('ep-max').textContent  = ct(d.today_max);
+  document.getElementById('ep-zone').textContent = 'Zone: '+(d.zone||'--')+' · '+(d.slot_minutes||60)+' min';
+  if (d.prices_tomorrow && d.prices_tomorrow.length)
+    document.getElementById('tmrw-btn').style.display='';
+  const slots = _epexDay==='today' ? d.prices_today : (d.prices_tomorrow||[]);
+  drawEpexChart(slots);
+  renderSchedule(slots);
+}
+
+function epexDay(day, btn) {
+  _epexDay = day;
+  document.querySelectorAll('.day-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('sched-title').textContent = 'Schedule — '+(day==='today'?'Today':'Tomorrow');
+  if (!_epexData) return;
+  const slots = day==='today' ? _epexData.prices_today : (_epexData.prices_tomorrow||[]);
+  drawEpexChart(slots); renderSchedule(slots);
+}
+
+function drawEpexChart(slots) {
+  if (!slots||!slots.length) return;
+  const now = new Date();
+  const mn = Math.min(...slots.map(s=>s.price_eur_kwh));
+  const mx = Math.max(...slots.map(s=>s.price_eur_kwh));
+  const labels = slots.map(s=>new Date(s.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));
+  const vals   = slots.map(s=>+(s.price_eur_kwh*100).toFixed(3));
+  const colors = slots.map(s=>{
+    if (new Date(s.start)<=now && now<new Date(s.end)) return 'rgba(245,158,11,.95)';
+    const r = mx>mn?(s.price_eur_kwh-mn)/(mx-mn):0.5;
+    return r<0.33?'rgba(16,185,129,.8)':r>0.66?'rgba(239,68,68,.8)':'rgba(245,158,11,.75)';
+  });
+  const ctx = document.getElementById('epexChart').getContext('2d');
+  if (_epexChartInst) _epexChartInst.destroy();
+  _epexChartInst = new Chart(ctx,{
+    type:'bar',
+    data:{labels,datasets:[{data:vals,backgroundColor:colors,borderRadius:2}]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      animation:{duration:500},
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.parsed.y.toFixed(2)} ct/kWh`}}},
+      scales:{
+        x:{ticks:{color:'#6b7280',maxTicksLimit:10,font:{size:9}},grid:{display:false}},
+        y:{ticks:{color:'#6b7280',font:{size:9},callback:v=>v+' ct'},grid:{color:getComputedStyle(document.documentElement).getPropertyValue('--divider-color')||'#374151'}}
+      }
+    }
+  });
+}
+
+function renderSchedule(slots) {
+  const tbody = document.getElementById('sched-body');
+  if (!slots||!slots.length){tbody.innerHTML='<tr><td colspan="3" style="color:var(--muted);text-align:center;padding:.5rem">No data</td></tr>';return;}
+  const now=new Date();
+  const mn=Math.min(...slots.map(s=>s.price_eur_kwh));
+  const mx=Math.max(...slots.map(s=>s.price_eur_kwh));
+  tbody.innerHTML=slots.map(s=>{
+    const isCur=new Date(s.start)<=now&&now<new Date(s.end);
+    const pct=mx>mn?Math.round((s.price_eur_kwh-mn)/(mx-mn)*100):50;
+    const col=pct<33?'var(--green)':pct>66?'var(--red)':'var(--yellow)';
+    const t=new Date(s.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    return `<tr class="${isCur?'cur':''}"><td>${t}</td><td>${(s.price_eur_kwh*100).toFixed(2)}</td><td><div class="pbar" style="width:${Math.max(4,pct)}%;background:${col}"></div></td></tr>`;
+  }).join('');
+  const cur=tbody.querySelector('tr.cur');
+  if(cur) setTimeout(()=>cur.scrollIntoView({block:'nearest',behavior:'smooth'}),100);
+}
+
+// Refresh every 60s to keep current-slot highlight up to date
+setInterval(()=>{ if(_epexData) renderEpex(); }, 60*1000);
+// Re-fetch full data every 15 min (prices update once/day ~13:00)
+setInterval(loadEpex, 15*60*1000);
 </script>
 </body>
 </html>
