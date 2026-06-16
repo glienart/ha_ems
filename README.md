@@ -1,0 +1,278 @@
+# HA EMS — Home Energy Management System
+
+A Home Assistant add-on that optimizes solar self-consumption, battery cycling, and EV charging using a rule-based engine and real-time EPEX SPOT day-ahead prices. Everything is configured from a built-in ingress dashboard — no YAML required.
+
+![Version](https://img.shields.io/badge/version-0.5.2-blue) ![HA](https://img.shields.io/badge/Home%20Assistant-add--on-41BDF5)
+
+---
+
+## Features
+
+- **Rule-based optimizer** — decides every N seconds whether to charge/discharge the battery and charge the EV, based on solar production, grid state, tariff, and battery SOC
+- **EPEX SPOT prices** — fetches day-ahead prices from the ENTSO-E Transparency Platform; supports 15 European bidding zones
+- **Effective tariff formula** — models your real electricity bill as `a × EPEX + b` separately for consumption and injection (covers grid fees, taxes, supplier margin)
+- **Interactive dashboard** — live energy flow diagram with animated SVG paths, EPEX bar chart with cheap/expensive zones, decision cards
+- **Searchable sensor picker** — comboboxes filtered by unit (W/kW for power, % for SOC, €/kWh for tariff, `switch.*` for switches)
+- **Settings persistence** — all configuration is saved to `/data/settings.json` and survives add-on updates
+- **Virtual HA sensors** — exposes EMS mode, battery decision, EV decision, solar surplus, and reasoning as standard HA entities
+
+---
+
+## Installation
+
+1. In Home Assistant, go to **Settings → Add-ons → Add-on Store** and click the three-dot menu → **Repositories**
+2. Add `https://github.com/glienart/ha_ems`
+3. Find **Home Energy Management System** in the store and click **Install**
+4. Go to the add-on's **Configuration** tab and set your EPEX token and zone (see [EPEX Setup](#epex-setup))
+5. Start the add-on and open the **EMS** panel in the sidebar
+
+---
+
+## Architecture
+
+```
+ha_ems/
+├── config.yaml          # Add-on manifest (version, arch, ingress, options schema)
+├── Dockerfile
+├── run.sh
+└── app/
+    ├── main.py          # FastAPI app + full dashboard HTML/CSS/JS (single file)
+    ├── optimizer.py     # Stateless rule-based decision engine
+    ├── settings.py      # Settings dataclass, load/save from /data/
+    ├── epex.py          # ENTSO-E API client + XML parser
+    ├── ha_client.py     # HA REST API client (get_state, set_entity_state, turn_on/off)
+    └── requirements.txt
+```
+
+The add-on is a FastAPI app served via HA ingress. The entire frontend is a single-page HTML string embedded in `main.py` — no build step, no separate static files.
+
+**Data flow:**
+```
+HA sensors → ha_client → run_optimizer() → EmsOptimizer.decide() → HA switches + virtual sensors
+                                  ↓
+                           _last_state dict → /api/state → dashboard JS
+```
+
+---
+
+## Configuration
+
+Only two fields live in the HA **Configuration** tab (because they're needed at startup before the dashboard is reachable):
+
+| Field | Description |
+|-------|-------------|
+| `epex_token` | ENTSO-E API security token |
+| `epex_zone` | Bidding zone short code (e.g. `BE`, `FR`, `DE-LU`) |
+
+All other settings are configured in the dashboard **Settings** tab and persisted to `/data/settings.json`.
+
+### EPEX Setup
+
+1. Register at [transparency.entsoe.eu](https://transparency.entsoe.eu) (free)
+2. In your account, go to **My Account Settings → Security Token → Generate a new token**
+3. Paste the token into the add-on Configuration tab
+4. Set your bidding zone:
+
+| Code | Zone | Code | Zone |
+|------|------|------|------|
+| `BE` | Belgium | `NL` | Netherlands |
+| `FR` | France | `AT` | Austria |
+| `DE-LU` | Germany/Luxembourg | `CH` | Switzerland |
+| `ES` | Spain | `DK1` | Denmark West |
+| `PT` | Portugal | `DK2` | Denmark East |
+| `IT-N` | Italy North | `SE3` | Sweden 3 |
+| `NO2` | Norway 2 | `FI` | Finland |
+| `PL` | Poland | `CZ` | Czech Republic |
+
+---
+
+## Dashboard
+
+The EMS panel has three tabs.
+
+### Dashboard tab
+
+Live cards updated every 5 seconds:
+
+| Card | Description |
+|------|-------------|
+| Solar surplus | Estimated excess solar production (W) |
+| Battery SOC | Current state of charge (%) |
+| EV SOC | Current EV state of charge (%) |
+| Buy price | Effective consumption price (€/kWh) after `ax+b` formula; sub-label shows sell price |
+
+**Energy flow diagram** — an animated replica of the HA Energy Distribution card showing active power flows as moving dots:
+
+- 🟠 Solar → Home (orange): shows when solar > 50 W
+- 🔵 Export → Grid (blue): shows when grid < −50 W (exporting)
+- 🔵 Grid → Home (blue): shows when grid > 50 W (importing)
+- 🟢 Battery → Home (teal): shows when battery is discharging (battery_w < −50 W)
+- 🟢 Battery → Grid (teal): shows when battery is discharging and grid is also exporting
+
+**Decisions:**
+
+| Card | Values |
+|------|--------|
+| Battery decision | charge / discharge / standby / idle |
+| EV decision | charge / pause |
+| Reason | Plain-text explanation of the current decision |
+
+**Mode selector** — switches between AUTO / ECO / CHEAP / MANUAL / OFF.
+
+### Energy tab
+
+- **EPEX price chart** — bar chart of today's and tomorrow's day-ahead prices with horizontal lines for cheap/expensive thresholds and a highlight on the current slot; refreshes every 15 minutes, re-highlights every 60 seconds
+- **Price statistics** — today and tomorrow min/avg/max in €/kWh
+- **Current and next slot prices**
+
+### Settings tab
+
+Settings are organized in groups with a pencil icon (✎) to open each group for editing. Changes are saved to `/data/settings.json` immediately and survive updates.
+
+#### Power Sensors
+
+All sensors filtered to units W or kW.
+
+| Field | Description |
+|-------|-------------|
+| Solar production | Power sensor for PV output (W) |
+| Grid power | Power sensor for grid exchange (W); positive = import, negative = export |
+| House consumption | Optional; if absent, estimated as solar − grid |
+| Battery power | Power sensor for battery exchange (W); positive = charging, negative = discharging |
+
+#### Battery
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| SOC sensor | — | Battery state of charge (%) |
+| Charge switch | — | Switch to activate charging |
+| Discharge switch | — | Switch to activate discharging |
+| Standby switch | — | Switch for standby/hold mode |
+| Max charge power | 3000 W | Power cap when charging |
+| Max discharge power | 3000 W | Power cap when discharging |
+| Min SOC | 10% | Never discharge below this |
+| Max SOC | 95% | Never charge above this |
+
+#### EV
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| Charger switch | — | Switch to start/stop charging |
+| SOC sensor | — | EV state of charge (%) |
+| Target SOC | 80% | Charge EV up to this level |
+| Departure time | 07:00 | Used to define the overnight charge window (21:00 → departure) |
+| Max charge power | 7400 W | EV charger power limit |
+
+#### Tariff & Optimizer
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| Price sensor | — | Optional static price sensor (EUR/kWh); overridden by live EPEX when configured |
+| Cheap threshold | 0.10 €/kWh | Effective consumption price below which grid charging is triggered |
+| Expensive threshold | 0.25 €/kWh | Effective consumption price above which battery discharge is triggered |
+| Update interval | 60 s | How often the optimizer runs |
+| **Consumption a** | 1.0 | EPEX multiplier for the price you pay when buying from the grid |
+| **Consumption b** | 0.0 €/kWh | Fixed offset for the price you pay (grid fees, taxes, margin) |
+| **Injection a** | 1.0 | EPEX multiplier for the price you receive when selling to the grid |
+| **Injection b** | 0.0 €/kWh | Fixed offset for the price you receive |
+
+**Effective price formula:**
+```
+Buy price  = tariff_a_consumption × EPEX_raw + tariff_b_consumption
+Sell price = tariff_a_injection   × EPEX_raw + tariff_b_injection
+```
+
+Example for a Belgian Fluvius dynamic contract (approximate):
+- Consumption: `a = 1.0`, `b = 0.07` (distribution + taxes ≈ 7 c€/kWh)
+- Injection: `a = 1.0`, `b = -0.02` (EPEX minus prosumer fee)
+
+---
+
+## Optimizer Modes
+
+### AUTO (default)
+
+Rule priority order, evaluated each cycle:
+
+1. **Battery below min SOC** → force charge from grid, pause EV
+2. **Cheap tariff** (effective buy price ≤ cheap threshold) → grid-charge battery and EV
+3. **Solar surplus** (> 200 W deadband) → charge battery first, then EV
+4. **Expensive tariff** (effective buy price ≥ expensive threshold) → discharge battery to cover load
+5. **EV overnight window** (21:00 → departure) → charge EV even without surplus
+6. **Default** → idle
+
+### ECO
+
+Maximises self-consumption, ignores tariff:
+- Solar surplus → charge battery, then EV
+- Grid import + battery above min SOC → discharge battery
+- Otherwise → idle
+
+### CHEAP
+
+Only acts on tariff:
+- Effective buy price ≤ cheap threshold → charge battery and EV from grid
+- Otherwise → idle
+
+### MANUAL
+
+No automatic actions. User controls switches directly via HA.
+
+### OFF
+
+Optimizer does nothing. All switches remain in their last state.
+
+---
+
+## Virtual HA Sensors
+
+The add-on creates these entities on each optimizer cycle. They are available in Lovelace, automations, and the HA energy dashboard.
+
+| Entity | Type | Description |
+|--------|------|-------------|
+| `sensor.ha_ems_mode` | sensor | Current EMS mode |
+| `sensor.ha_ems_battery_decision` | sensor | charge / discharge / standby / idle |
+| `sensor.ha_ems_ev_decision` | sensor | charge / pause |
+| `sensor.ha_ems_solar_surplus` | sensor (W) | Estimated excess solar available |
+| `sensor.ha_ems_reason` | sensor | Human-readable explanation of last decision |
+| `sensor.ha_ems_epex_price` | sensor (€/kWh) | Current EPEX slot price with today/tomorrow statistics |
+
+---
+
+## Settings Persistence
+
+Settings are stored in two files under `/data/` (the add-on's persistent volume — survives updates):
+
+| File | Written by | Contains |
+|------|-----------|---------|
+| `/data/options.json` | Home Assistant | `epex_token`, `epex_zone` |
+| `/data/settings.json` | EMS dashboard (on Save) | All other settings |
+
+On startup, the add-on loads both files and immediately writes `/data/settings.json` with the merged result. This means **settings are safe from the first boot** onward.
+
+> **After installing for the first time or upgrading from < 0.5.0:** enter your sensors in the Settings tab and click Save once. They will persist through all future updates.
+
+---
+
+## API Endpoints
+
+The add-on exposes a small REST API on its ingress port (used by the dashboard):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/state` | Current optimizer state (power readings, decisions, prices) |
+| GET | `/api/settings` | All settings as JSON |
+| POST | `/api/settings` | Update one or more settings |
+| POST | `/api/mode` | Change optimizer mode |
+| GET | `/api/epex` | Latest EPEX price data (prices_today, prices_tomorrow, stats) |
+| GET | `/api/entities` | All HA entities (used to populate sensor picker) |
+
+---
+
+## Development
+
+The add-on targets `aarch64`, `amd64`, `armhf`, and `armv7`.
+
+To test locally, point `HA_API` in `ha_client.py` at a real HA instance and set `SUPERVISOR_TOKEN` in your environment. The FastAPI app can be run directly with `uvicorn app.main:app`.
+
+Settings during local development are read from `/data/options.json` and `/data/settings.json` — create these files with your test values.
