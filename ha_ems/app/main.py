@@ -656,60 +656,82 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 <!-- ENERGY PAGE -->
 <div id="page-energy" class="page">
-  <div class="card" style="margin-bottom:.75rem;padding:1rem">
-    <div style="display:grid;grid-template-columns:420px 1fr;gap:2rem;align-items:center">
-      <div>
-        <div class="card-label" style="margin-bottom:.5rem;text-align:center">Live flow</div>
-        <div class="ha-e-wrap">
-      <div class="ha-e-node solar">
-        <span class="ha-e-label">Solar</span>
-        <div class="ha-e-circle c-solar">
-          <svg viewBox="0 0 24 24" width="22" height="22"><path fill="#ff9800" d="M11.45,2V5.55L15,3.77L11.45,2M10.45,8L8,10.46L11.75,11.71L10.45,8M2,11.45L3.77,15L5.55,11.45H2M10,2H2V10C2.57,10.17 3.17,10.25 3.77,10.25C7.35,10.26 10.26,7.35 10.27,3.75C10.26,3.16 10.17,2.57 10,2M17,22V16H14L19,7V13H22L17,22Z"/></svg>
-          <span class="ha-e-val" id="ev-solar">-- W</span>
+  <!-- Live stat cards -->
+  <div class="grid" style="margin-bottom:.75rem">
+    <div class="card">
+      <div class="card-label" style="color:#ff9800">Solar</div>
+      <div class="card-value" id="ec-solar">-- W</div>
+      <div class="card-sub">Production</div>
+    </div>
+    <div class="card">
+      <div class="card-label" style="color:#488fc2">Grid</div>
+      <div class="card-value" id="ec-grid">-- W</div>
+      <div class="card-sub" id="ec-grid-dir">--</div>
+    </div>
+    <div class="card">
+      <div class="card-label" style="color:var(--accent)">Home</div>
+      <div class="card-value" id="ec-home">-- W</div>
+      <div class="card-sub">Consumption</div>
+    </div>
+    <div class="card">
+      <div class="card-label" style="color:#4db6ac">Battery</div>
+      <div class="card-value" id="ec-bat">-- %</div>
+      <div class="card-sub" id="ec-bat-dec">--</div>
+    </div>
+  </div>
+  <!-- Flow + Chart -->
+  <div style="display:grid;grid-template-columns:300px 1fr;gap:.75rem;margin-bottom:.75rem;align-items:start">
+    <div class="card">
+      <div class="card-label" style="margin-bottom:.5rem;text-align:center">Live flow</div>
+      <div class="ha-e-wrap" style="height:320px">
+        <div class="ha-e-node solar">
+          <span class="ha-e-label">Solar</span>
+          <div class="ha-e-circle c-solar">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="#ff9800" d="M11.45,2V5.55L15,3.77L11.45,2M10.45,8L8,10.46L11.75,11.71L10.45,8M2,11.45L3.77,15L5.55,11.45H2M10,2H2V10C2.57,10.17 3.17,10.25 3.77,10.25C7.35,10.26 10.26,7.35 10.27,3.75C10.26,3.16 10.17,2.57 10,2M17,22V16H14L19,7V13H22L17,22Z"/></svg>
+            <span class="ha-e-val" id="ev-solar">-- W</span>
+          </div>
         </div>
+        <div class="ha-e-node grid">
+          <div class="ha-e-circle c-grid">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="#488fc2" d="M8.28,5.45L6.5,4.55L7.76,2H16.23L17.5,4.55L15.72,5.44L15,4H9L8.28,5.45M18.62,8H14.09L13.3,5H10.7L9.91,8H5.38L4.1,10.55L5.89,11.44L6.62,10H17.38L18.1,11.45L19.89,10.56L18.62,8M17.77,22H15.7L15.46,21.1L12,15.9L8.53,21.1L8.3,22H6.23L9.12,11H11.19L10.83,12.35L12,14.1L13.16,12.35L12.81,11H14.88L17.77,22M11.4,15L10.5,13.65L9.32,18.13L11.4,15M14.68,18.12L13.5,13.64L12.6,15L14.68,18.12Z"/></svg>
+            <span class="ha-e-val" id="ev-grid">-- W</span>
+            <span class="ha-e-sub" id="ev-grid-dir">--</span>
+          </div>
+          <span class="ha-e-label">Grid</span>
+        </div>
+        <div class="ha-e-node home">
+          <div class="ha-e-circle c-home">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z"/></svg>
+            <span class="ha-e-val" id="ev-home">-- W</span>
+          </div>
+          <span class="ha-e-label">Home</span>
+        </div>
+        <div class="ha-e-node battery">
+          <div class="ha-e-circle c-battery">
+            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="#4db6ac" d="M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.67C6,21.4 6.6,22 7.33,22H16.67A1.33,1.33 0 0,0 18,20.67V5.33C18,4.6 17.4,4 16.67,4Z"/></svg>
+            <span class="ha-e-val" id="ev-bat">-- %</span>
+            <span class="ha-e-sub" id="ev-bat-dec">--</span>
+          </div>
+          <span class="ha-e-label">Battery</span>
+        </div>
+        <svg class="ha-e-lines" viewBox="0 0 100 100" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+          <path id="epl-solar"    class="ha-e-path p-solar"    d="M50,10 C50,35 90,35 90,50"/>
+          <path id="epl-return"   class="ha-e-path p-return"   d="M50,10 C50,35 10,35 10,50"/>
+          <path id="epl-grid"     class="ha-e-path p-grid"     d="M10,50 H90"/>
+          <path id="epl-bat-home" class="ha-e-path p-bat-home" d="M50,90 C50,65 90,65 90,50"/>
+          <path id="epl-bat-grid" class="ha-e-path p-bat-grid" d="M50,90 C50,65 10,65 10,50"/>
+          <circle r="1.2" class="d-solar"    id="edot-solar"    style="display:none"><animateMotion dur="2.8s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-solar"/></animateMotion></circle>
+          <circle r="1.2" class="d-return"   id="edot-return"   style="display:none"><animateMotion dur="3.2s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-return"/></animateMotion></circle>
+          <circle r="1.2" class="d-grid"     id="edot-grid"     style="display:none"><animateMotion dur="4s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-grid"/></animateMotion></circle>
+          <circle r="1.2" class="d-bat-home" id="edot-bat-home" style="display:none"><animateMotion dur="3.5s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-home"/></animateMotion></circle>
+          <circle r="1.2" class="d-bat-grid" id="edot-bat-grid" style="display:none"><animateMotion dur="4s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-grid"/></animateMotion></circle>
+        </svg>
       </div>
-      <div class="ha-e-node grid">
-        <div class="ha-e-circle c-grid">
-          <svg viewBox="0 0 24 24" width="22" height="22"><path fill="#488fc2" d="M8.28,5.45L6.5,4.55L7.76,2H16.23L17.5,4.55L15.72,5.44L15,4H9L8.28,5.45M18.62,8H14.09L13.3,5H10.7L9.91,8H5.38L4.1,10.55L5.89,11.44L6.62,10H17.38L18.1,11.45L19.89,10.56L18.62,8M17.77,22H15.7L15.46,21.1L12,15.9L8.53,21.1L8.3,22H6.23L9.12,11H11.19L10.83,12.35L12,14.1L13.16,12.35L12.81,11H14.88L17.77,22M11.4,15L10.5,13.65L9.32,18.13L11.4,15M14.68,18.12L13.5,13.64L12.6,15L14.68,18.12Z"/></svg>
-          <span class="ha-e-val" id="ev-grid">-- W</span>
-          <span class="ha-e-sub" id="ev-grid-dir">--</span>
-        </div>
-        <span class="ha-e-label">Grid</span>
-      </div>
-      <div class="ha-e-node home">
-        <div class="ha-e-circle c-home">
-          <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z"/></svg>
-          <span class="ha-e-val" id="ev-home">-- W</span>
-        </div>
-        <span class="ha-e-label">Home</span>
-      </div>
-      <div class="ha-e-node battery">
-        <div class="ha-e-circle c-battery">
-          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="#4db6ac" d="M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.67C6,21.4 6.6,22 7.33,22H16.67A1.33,1.33 0 0,0 18,20.67V5.33C18,4.6 17.4,4 16.67,4Z"/></svg>
-          <span class="ha-e-val" id="ev-bat">-- %</span>
-          <span class="ha-e-sub" id="ev-bat-dec">--</span>
-        </div>
-        <span class="ha-e-label">Battery</span>
-      </div>
-      <svg class="ha-e-lines" viewBox="0 0 100 100" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-        <path id="epl-solar"    class="ha-e-path p-solar"    d="M50,10 C50,35 90,35 90,50"/>
-        <path id="epl-return"   class="ha-e-path p-return"   d="M50,10 C50,35 10,35 10,50"/>
-        <path id="epl-grid"     class="ha-e-path p-grid"     d="M10,50 H90"/>
-        <path id="epl-bat-home" class="ha-e-path p-bat-home" d="M50,90 C50,65 90,65 90,50"/>
-        <path id="epl-bat-grid" class="ha-e-path p-bat-grid" d="M50,90 C50,65 10,65 10,50"/>
-        <circle r="1.2" class="d-solar"    id="edot-solar"    style="display:none"><animateMotion dur="2.8s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-solar"/></animateMotion></circle>
-        <circle r="1.2" class="d-return"   id="edot-return"   style="display:none"><animateMotion dur="3.2s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-return"/></animateMotion></circle>
-        <circle r="1.2" class="d-grid"     id="edot-grid"     style="display:none"><animateMotion dur="4s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-grid"/></animateMotion></circle>
-        <circle r="1.2" class="d-bat-home" id="edot-bat-home" style="display:none"><animateMotion dur="3.5s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-home"/></animateMotion></circle>
-        <circle r="1.2" class="d-bat-grid" id="edot-bat-grid" style="display:none"><animateMotion dur="4s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-grid"/></animateMotion></circle>
-      </svg>
-        </div>
-      </div>
-      <div style="min-width:0">
-        <div class="card-label" style="margin-bottom:.5rem">Power sources</div>
-        <div style="position:relative;height:400px">
-          <canvas id="power-chart"></canvas>
-        </div>
+    </div>
+    <div class="card">
+      <div class="card-label" style="margin-bottom:.5rem">Power sources</div>
+      <div style="position:relative;height:340px">
+        <canvas id="power-chart"></canvas>
       </div>
     </div>
   </div>
@@ -832,12 +854,24 @@ function updateFlow(d) {
                   + (batDischarging ? Math.abs(batW ?? 0) : 0)
                   - (batCharging    ? (batW ?? 0)         : 0));
 
+  const gridDir = grid > 0 ? 'Import' : grid < 0 ? 'Export' : 'Idle';
+  const batSub  = batW!=null ? (batW>50?'↑ '+batW+' W':batW<-50?'↓ '+Math.abs(batW)+' W':'idle') : batDec;
+
+  // Flow diagram nodes
   set('ev-solar',    solar > 0 ? solar+' W' : '0 W');
   set('ev-grid',     Math.abs(grid)+' W');
-  set('ev-grid-dir', grid > 0 ? 'Import' : grid < 0 ? 'Export' : 'Idle');
+  set('ev-grid-dir', gridDir);
   set('ev-home',     homeEst > 0 ? Math.round(homeEst)+' W' : '-- W');
   set('ev-bat',      batSoc!=null ? batSoc+'%' : '--');
-  set('ev-bat-dec',  batW!=null ? (batW>50?'↑ '+batW+' W':batW<-50?'↓ '+Math.abs(batW)+' W':'idle') : batDec);
+  set('ev-bat-dec',  batSub);
+
+  // Stat cards on energy tab
+  set('ec-solar',    (d.solar_w ?? '--')+' W');
+  set('ec-grid',     Math.abs(grid)+' W');
+  set('ec-grid-dir', gridDir);
+  set('ec-home',     homeEst > 0 ? Math.round(homeEst)+' W' : '-- W');
+  set('ec-bat',      batSoc!=null ? batSoc+'%' : '--');
+  set('ec-bat-dec',  batSub);
 
   show('edot-solar',    solar > 50);
   show('edot-return',   grid < -50);
@@ -1194,6 +1228,31 @@ async function loadPowerChart() {
   } catch(e) { console.error('Power chart:', e); }
 }
 
+// Align all series to common 5-min buckets so mode:'index' tooltip works correctly
+function bucketSeries(rawSeries) {
+  const BUCKET = 5 * 60 * 1000;
+  const allTimes = new Set();
+  for (const pts of Object.values(rawSeries)) {
+    for (const p of pts) allTimes.add(Math.round(new Date(p[0]).getTime() / BUCKET) * BUCKET);
+  }
+  const times = [...allTimes].sort(function(a,b){return a-b;});
+  const result = {};
+  for (const role of Object.keys(rawSeries)) {
+    const pts = rawSeries[role];
+    const map = new Map();
+    for (const p of pts) {
+      const t = Math.round(new Date(p[0]).getTime() / BUCKET) * BUCKET;
+      // average if multiple points fall in same bucket
+      if (map.has(t)) map.set(t, (map.get(t) + p[1]) / 2);
+      else map.set(t, p[1]);
+    }
+    result[role] = times.map(function(t) {
+      return { x: t, y: map.has(t) ? +(map.get(t)/1000).toFixed(3) : null };
+    });
+  }
+  return result;
+}
+
 function renderPowerChart(series) {
   const ctx = document.getElementById('power-chart');
   if (!ctx || typeof Chart === 'undefined') return;
@@ -1201,6 +1260,8 @@ function renderPowerChart(series) {
   const now = Date.now();
   const midnight = new Date(); midnight.setHours(0,0,0,0);
   const t0 = midnight.getTime();
+
+  const bucketed = bucketSeries(series);
 
   const COLORS = {
     solar:   { line:'rgb(255,152,0)',   fill:'rgba(255,152,0,0.15)'   },
@@ -1211,16 +1272,17 @@ function renderPowerChart(series) {
   const LABELS = { solar:'Solar', grid:'Grid', battery:'Battery', house:'Consumption' };
 
   function toDataset(role) {
-    const pts = series[role];
+    const pts = bucketed[role];
     if (!pts || !pts.length) return null;
     const c = COLORS[role];
     return {
       label: LABELS[role],
-      data: pts.map(function(p) { return { x: new Date(p[0]).getTime(), y: +(p[1]/1000).toFixed(3) }; }),
+      data: pts,
       borderColor: c.line,
       backgroundColor: c.fill,
       fill: role !== 'house',
-      tension: 0.25,
+      tension: 0.4,
+      spanGaps: true,
       borderWidth: role === 'house' ? 2 : 1.5,
       borderDash: role === 'house' ? [5,3] : [],
       pointRadius: 0,
@@ -1254,9 +1316,17 @@ function renderPowerChart(series) {
         legend: { labels: { boxWidth: 10, padding: 14, usePointStyle: true } },
         tooltip: {
           mode: 'index', intersect: false,
+          filter: function(item) { return item.parsed.y != null; },
           callbacks: {
-            title: function(items) { const d=new Date(items[0].parsed.x); return d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(); },
-            label: function(c) { return ' '+c.dataset.label+': '+c.parsed.y.toFixed(2)+' kW'; },
+            title: function(items) {
+              if (!items.length) return '';
+              const d = new Date(items[0].parsed.x);
+              return d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes();
+            },
+            label: function(c) {
+              if (c.parsed.y == null) return null;
+              return ' '+c.dataset.label+': '+c.parsed.y.toFixed(2)+' kW';
+            },
           },
         },
       },
