@@ -482,11 +482,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .save-btn:hover{opacity:.9}
   .toast{position:fixed;bottom:1rem;right:1rem;background:var(--accent);color:#fff;padding:.5rem 1rem;border-radius:.5rem;font-size:.85rem;display:none;z-index:999}
   /* Energy — HA-style distribution card */
-  .ha-e-wrap{position:relative;height:290px;max-width:500px;margin:0 auto .75rem}
+  .ha-e-wrap{position:relative;height:400px;max-width:400px;margin:0 auto .75rem}
   .ha-e-node{position:absolute;display:flex;flex-direction:column;align-items:center;gap:.25rem;z-index:1}
   .ha-e-node.solar{top:0;left:calc(50% - 40px)}
-  .ha-e-node.grid{top:105px;left:0}
-  .ha-e-node.home{top:105px;right:0}
+  .ha-e-node.grid{top:calc(50% - 40px);left:0}
+  .ha-e-node.home{top:calc(50% - 40px);right:0}
   .ha-e-node.battery{bottom:0;left:calc(50% - 40px)}
   .ha-e-circle{width:80px;height:80px;border-radius:50%;border:2px solid var(--border);background:var(--card);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;font-size:.72rem;box-shadow:0 1px 4px rgba(0,0,0,.08)}
   .ha-e-circle.c-solar{border-color:#ff9800;color:#ff9800}
@@ -711,16 +711,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       <!-- SVG flow lines (viewBox matches 500x290 container, preserveAspectRatio=none) -->
       <svg class="ha-e-lines" viewBox="0 0 100 100" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-        <!-- Solar (center top, ~28% down) → Home (right, ~50% down) -->
-        <path id="epl-solar"    class="ha-e-path p-solar"    d="M50,27 C50,48 72,48 84,50"/>
-        <!-- Solar → Grid (export) -->
-        <path id="epl-return"   class="ha-e-path p-return"   d="M50,27 C50,48 28,48 16,50"/>
-        <!-- Grid import → Home -->
-        <path id="epl-grid"     class="ha-e-path p-grid"     d="M16,50 H84"/>
-        <!-- Battery → Home -->
-        <path id="epl-bat-home" class="ha-e-path p-bat-home" d="M50,73 C50,52 72,52 84,50"/>
-        <!-- Battery → Grid -->
-        <path id="epl-bat-grid" class="ha-e-path p-bat-grid" d="M50,73 C50,52 28,52 16,50"/>
+        <!-- Solar (50%,10%) → Home (90%,50%) -->
+        <path id="epl-solar"    class="ha-e-path p-solar"    d="M50,10 C50,35 90,35 90,50"/>
+        <!-- Solar (50%,10%) → Grid (10%,50%) export -->
+        <path id="epl-return"   class="ha-e-path p-return"   d="M50,10 C50,35 10,35 10,50"/>
+        <!-- Grid (10%,50%) → Home (90%,50%) import -->
+        <path id="epl-grid"     class="ha-e-path p-grid"     d="M10,50 H90"/>
+        <!-- Battery (50%,90%) → Home (90%,50%) -->
+        <path id="epl-bat-home" class="ha-e-path p-bat-home" d="M50,90 C50,65 90,65 90,50"/>
+        <!-- Battery (50%,90%) → Grid (10%,50%) -->
+        <path id="epl-bat-grid" class="ha-e-path p-bat-grid" d="M50,90 C50,65 10,65 10,50"/>
 
         <!-- Animated dots – hidden until JS turns them on -->
         <circle r="1.2" class="d-solar"    id="edot-solar"    style="display:none"><animateMotion dur="2.8s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-solar"/></animateMotion></circle>
