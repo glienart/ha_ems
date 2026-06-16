@@ -24,6 +24,7 @@ class EmsSettings:
     grid_power_sensor: str = ""
     house_power_sensor: str = ""
     battery_soc_sensor: str = ""
+    battery_power_sensor: str = ""   # W, + = charging, - = discharging
     battery_charge_switch: str = ""
     battery_discharge_switch: str = ""
     battery_standby_switch: str = ""

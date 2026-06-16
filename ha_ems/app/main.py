@@ -160,7 +160,8 @@ async def run_optimizer():
     solar_w = await ha_client.get_float(s.solar_power_sensor)
     grid_w = await ha_client.get_float(s.grid_power_sensor)
     house_w = await ha_client.get_float(s.house_power_sensor) if s.house_power_sensor else None
-    bat_soc = await ha_client.get_float(s.battery_soc_sensor, default=50.0)
+    bat_soc   = await ha_client.get_float(s.battery_soc_sensor, default=50.0)
+    bat_power = await ha_client.get_float(s.battery_power_sensor) if s.battery_power_sensor else None
     ev_soc = await ha_client.get_float(s.ev_soc_sensor) if s.ev_soc_sensor else None
     ev_connected = await ha_client.get_bool(s.ev_charger_switch) if s.ev_charger_switch else False
     tariff = await ha_client.get_float(s.tariff_sensor) if s.tariff_sensor else None
@@ -249,6 +250,7 @@ async def run_optimizer():
         "battery_soc": round(bat_soc),
         "ev_soc": round(ev_soc) if ev_soc is not None else None,
         "tariff": tariff,
+        "battery_w": round(bat_power) if bat_power is not None else None,
         "epex_price": _epex_data.get("current_price") if _epex_data else None,
         "reason": decision.reason,
         "updated_at": datetime.now().isoformat(),
@@ -282,6 +284,7 @@ class SettingsUpdate(BaseModel):
     grid_power_sensor: Optional[str] = None
     house_power_sensor: Optional[str] = None
     battery_soc_sensor: Optional[str] = None
+    battery_power_sensor: Optional[str] = None
     battery_charge_switch: Optional[str] = None
     battery_discharge_switch: Optional[str] = None
     battery_standby_switch: Optional[str] = None
@@ -397,9 +400,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;padding:1rem}
   /* Nav */
-  nav{display:flex;gap:.5rem;margin-bottom:1.25rem;border-bottom:1px solid var(--border);padding-bottom:.75rem}
+  nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem;border-bottom:1px solid var(--border);padding-bottom:.75rem}
   .nav-btn{padding:.35rem .85rem;border-radius:.5rem;border:1px solid transparent;background:none;color:var(--muted);cursor:pointer;font-size:.85rem}
   .nav-btn.active{background:var(--card);border-color:var(--border);color:var(--text)}
+  .nav-settings{font-size:1.1rem;padding:.25rem .6rem;border:1px solid var(--border)!important;border-radius:.5rem}
   /* Cards */
   .page{display:none}.page.active{display:block}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem;margin-bottom:1rem}
@@ -440,6 +444,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .sg-key{color:var(--muted)}
   .sg-val{color:var(--text);font-weight:500;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
   .sg-edit{margin-top:.5rem;padding-top:.5rem;border-top:1px solid var(--border)}
+  /* Combo search */
+  .combo{position:relative}
+  .combo-input{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:.4rem .6rem;border-radius:.4rem;font-size:.82rem}
+  .combo-input:focus{outline:none;border-color:var(--accent)}
+  .combo-list{position:absolute;top:100%;left:0;right:0;background:var(--card);border:1px solid var(--border);border-radius:.4rem;max-height:190px;overflow-y:auto;z-index:300;display:none;list-style:none;padding:0;margin:2px 0 0;box-shadow:0 4px 16px rgba(0,0,0,.15)}
+  .combo-list li{padding:.3rem .5rem;cursor:pointer;display:flex;align-items:center;gap:.4rem;font-size:.78rem;border-bottom:1px solid var(--border)}
+  .combo-list li:last-child{border-bottom:none}
+  .combo-list li:hover,.combo-list li.hl{background:var(--border)}
+  .cl-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
+  .cl-unit{font-size:.64rem;padding:.1rem .3rem;border-radius:.25rem;background:var(--border);color:var(--muted);white-space:nowrap;flex-shrink:0}
+  .cl-none{color:var(--muted);font-style:italic}
   .field{margin-bottom:.6rem}
   .field label{display:block;font-size:.78rem;color:var(--muted);margin-bottom:.2rem}
   .field select,.field input{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:.4rem .6rem;border-radius:.4rem;font-size:.82rem}
@@ -503,9 +518,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <h1><span class="dot"></span> HA EMS</h1>
 
 <nav>
-  <button class="nav-btn active" onclick="showPage('dashboard',this)">Dashboard</button>
-  <button class="nav-btn" onclick="showPage('settings',this)">Settings</button>
-  <button class="nav-btn" onclick="showPage('energy',this)">Energy ⚡</button>
+  <div style="display:flex;gap:.5rem">
+    <button class="nav-btn active" onclick="showPage('dashboard',this)">Dashboard</button>
+    <button class="nav-btn" onclick="showPage('energy',this)">Energy ⚡</button>
+  </div>
+  <button class="nav-btn nav-settings" id="btn-settings" onclick="showPage('settings',this)" title="Settings">✎</button>
 </nav>
 
 <!-- DASHBOARD PAGE -->
@@ -546,12 +563,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="sg-row"><span class="sg-key">Solar</span><span id="v_solar_power_sensor" class="sg-val">—</span></div>
         <div class="sg-row"><span class="sg-key">Grid</span><span id="v_grid_power_sensor" class="sg-val">—</span></div>
         <div class="sg-row"><span class="sg-key">House</span><span id="v_house_power_sensor" class="sg-val">—</span></div>
+        <div class="sg-row"><span class="sg-key">Battery power</span><span id="v_battery_power_sensor" class="sg-val">—</span></div>
       </div>
       <div id="sg-power-edit" class="sg-edit" style="display:none">
-        <div class="field"><label>Solar production (W)</label><select id="s_solar_power_sensor"><option value="">Loading...</option></select></div>
-        <div class="field"><label>Grid power (W, + = import)</label><select id="s_grid_power_sensor"><option value="">Loading...</option></select></div>
-        <div class="field"><label>House consumption (W, optional)</label><select id="s_house_power_sensor"><option value="">Loading...</option></select></div>
-        <button class="save-btn" onclick="saveGroup(['solar_power_sensor','grid_power_sensor','house_power_sensor'],'sg-power')">Save</button>
+        <div class="field"><label>Solar production (W)</label><div class="combo"><input class="combo-input" id="s_solar_power_sensor" placeholder="Search W sensor…" autocomplete="off"><ul class="combo-list" id="sl_solar_power_sensor"></ul></div></div>
+        <div class="field"><label>Grid power (W, + = import)</label><div class="combo"><input class="combo-input" id="s_grid_power_sensor" placeholder="Search W sensor…" autocomplete="off"><ul class="combo-list" id="sl_grid_power_sensor"></ul></div></div>
+        <div class="field"><label>House consumption (W, optional)</label><div class="combo"><input class="combo-input" id="s_house_power_sensor" placeholder="Search W sensor…" autocomplete="off"><ul class="combo-list" id="sl_house_power_sensor"></ul></div></div>
+        <div class="field"><label>Battery power (W, + charge / − discharge)</label><div class="combo"><input class="combo-input" id="s_battery_power_sensor" placeholder="Search W sensor…" autocomplete="off"><ul class="combo-list" id="sl_battery_power_sensor"></ul></div></div>
+        <button class="save-btn" onclick="saveGroup(['solar_power_sensor','grid_power_sensor','house_power_sensor','battery_power_sensor'],'sg-power')">Save</button>
       </div>
     </div>
 
@@ -565,10 +584,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="sg-row"><span class="sg-key">SOC range</span><span id="v_battery_soc_range" class="sg-val">—</span></div>
       </div>
       <div id="sg-bat-edit" class="sg-edit" style="display:none">
-        <div class="field"><label>Battery SOC (%)</label><select id="s_battery_soc_sensor"><option value="">Loading...</option></select></div>
-        <div class="field"><label>Charge switch</label><select id="s_battery_charge_switch"><option value="">Loading...</option></select></div>
-        <div class="field"><label>Discharge switch</label><select id="s_battery_discharge_switch"><option value="">Loading...</option></select></div>
-        <div class="field"><label>Standby switch (optional)</label><select id="s_battery_standby_switch"><option value="">Loading...</option></select></div>
+        <div class="field"><label>Battery SOC (%)</label><div class="combo"><input class="combo-input" id="s_battery_soc_sensor" placeholder="Search % sensor…" autocomplete="off"><ul class="combo-list" id="sl_battery_soc_sensor"></ul></div></div>
+        <div class="field"><label>Charge switch</label><div class="combo"><input class="combo-input" id="s_battery_charge_switch" placeholder="Search switch…" autocomplete="off"><ul class="combo-list" id="sl_battery_charge_switch"></ul></div></div>
+        <div class="field"><label>Discharge switch</label><div class="combo"><input class="combo-input" id="s_battery_discharge_switch" placeholder="Search switch…" autocomplete="off"><ul class="combo-list" id="sl_battery_discharge_switch"></ul></div></div>
+        <div class="field"><label>Standby switch (optional)</label><div class="combo"><input class="combo-input" id="s_battery_standby_switch" placeholder="Search switch…" autocomplete="off"><ul class="combo-list" id="sl_battery_standby_switch"></ul></div></div>
         <div class="field"><label>Max charge (W)</label><input type="number" id="s_battery_max_charge_w" min="100" max="20000"></div>
         <div class="field"><label>Max discharge (W)</label><input type="number" id="s_battery_max_discharge_w" min="100" max="20000"></div>
         <div class="field"><label>Min SOC (%)</label><input type="number" id="s_battery_min_soc" min="0" max="50"></div>
@@ -587,8 +606,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="sg-row"><span class="sg-key">Max charge</span><span id="v_ev_max_charge_w" class="sg-val">—</span></div>
       </div>
       <div id="sg-ev-edit" class="sg-edit" style="display:none">
-        <div class="field"><label>Charger switch</label><select id="s_ev_charger_switch"><option value="">Loading...</option></select></div>
-        <div class="field"><label>EV SOC sensor</label><select id="s_ev_soc_sensor"><option value="">Loading...</option></select></div>
+        <div class="field"><label>Charger switch</label><div class="combo"><input class="combo-input" id="s_ev_charger_switch" placeholder="Search switch…" autocomplete="off"><ul class="combo-list" id="sl_ev_charger_switch"></ul></div></div>
+        <div class="field"><label>EV SOC sensor (%)</label><div class="combo"><input class="combo-input" id="s_ev_soc_sensor" placeholder="Search % sensor…" autocomplete="off"><ul class="combo-list" id="sl_ev_soc_sensor"></ul></div></div>
         <div class="field"><label>Target SOC (%)</label><input type="number" id="s_ev_target_soc" min="20" max="100"></div>
         <div class="field"><label>Departure (HH:MM)</label><input type="time" id="s_ev_departure_time"></div>
         <div class="field"><label>Max charge (W)</label><input type="number" id="s_ev_max_charge_w" min="1000" max="22000"></div>
@@ -605,7 +624,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="sg-row"><span class="sg-key">Update interval</span><span id="v_update_interval" class="sg-val">—</span></div>
       </div>
       <div id="sg-tariff-edit" class="sg-edit" style="display:none">
-        <div class="field"><label>Price sensor (EUR/kWh, optional)</label><select id="s_tariff_sensor"><option value="">Loading...</option></select></div>
+        <div class="field"><label>Price sensor (EUR/kWh, optional)</label><div class="combo"><input class="combo-input" id="s_tariff_sensor" placeholder="Search price sensor…" autocomplete="off"><ul class="combo-list" id="sl_tariff_sensor"></ul></div></div>
         <div class="field"><label>Cheap threshold (EUR/kWh)</label><input type="number" id="s_cheap_threshold" step="0.01" min="0" max="1"></div>
         <div class="field"><label>Expensive threshold (EUR/kWh)</label><input type="number" id="s_expensive_threshold" step="0.01" min="0" max="1"></div>
         <div class="field"><label>Update interval (s)</label><input type="number" id="s_update_interval" min="10" max="3600"></div>
@@ -804,7 +823,8 @@ function updateFlow(d) {
   set('ev-grid-dir', grid > 0 ? 'Import' : grid < 0 ? 'Export' : 'Idle');
   set('ev-home',     homeEst > 0 ? Math.round(homeEst)+' W' : '-- W');
   set('ev-bat',      batSoc!=null ? batSoc+'%' : '--');
-  set('ev-bat-dec',  batDec);
+  const batW = d.battery_w;
+  set('ev-bat-dec',  batW!=null ? (batW>50?'↑ '+batW+' W':batW<-50?'↓ '+Math.abs(batW)+' W':'idle') : batDec);
 
   // Animated dot visibility
   show('edot-solar',    solar > 50);                        // solar → home
@@ -822,52 +842,135 @@ document.querySelectorAll(".mode-btn").forEach(btn => {
 });
 
 // ── Settings ─────────────────────────────────────────────────────────────────
-const SENSOR_SELECTS = ["s_solar_power_sensor","s_grid_power_sensor","s_house_power_sensor","s_battery_soc_sensor","s_tariff_sensor","s_ev_soc_sensor"];
-const SWITCH_SELECTS = ["s_battery_charge_switch","s_battery_discharge_switch","s_battery_standby_switch","s_ev_charger_switch"];
 
-function buildOptions(entities, currentVal) {
-  let html = `<option value="">-- none --</option>`;
-  for (const e of entities) {
-    const sel = e.entity_id === currentVal ? "selected" : "";
-    const label = e.friendly_name !== e.entity_id ? `${e.friendly_name} (${e.entity_id})` : e.entity_id;
-    html += `<option value="${e.entity_id}" ${sel}>${label}</option>`;
-  }
-  return html;
-}
+// Unit filter map: which units to prefer for each field
+const FIELD_UNITS = {
+  solar_power_sensor:        ['W','kW','watt','watts'],
+  grid_power_sensor:         ['W','kW','watt','watts'],
+  house_power_sensor:        ['W','kW','watt','watts'],
+  battery_power_sensor:      ['W','kW','watt','watts'],
+  battery_soc_sensor:        ['%'],
+  ev_soc_sensor:             ['%'],
+  tariff_sensor:             ['EUR/kWh','€/kWh','$/kWh','USD/kWh','ct/kWh'],
+};
+const SWITCH_FIELDS = ['battery_charge_switch','battery_discharge_switch','battery_standby_switch','ev_charger_switch'];
+const COMBO_FIELDS  = [...Object.keys(FIELD_UNITS), ...SWITCH_FIELDS];
 
 function shorten(val) { return val ? (val.split('.').slice(1).join('.')||val) : '—'; }
+
+// Combobox engine
+function setupCombo(fieldKey, allEntities, currentVal) {
+  const input = document.getElementById('s_'+fieldKey);
+  const list  = document.getElementById('sl_'+fieldKey);
+  if (!input || !list) return;
+
+  // Determine candidate pool
+  const isSwitch = SWITCH_FIELDS.includes(fieldKey);
+  const wantedUnits = FIELD_UNITS[fieldKey] || [];
+  let pool;
+  if (isSwitch) {
+    pool = allEntities.filter(e => e.entity_id.startsWith('switch.')||e.entity_id.startsWith('input_boolean.'));
+  } else if (wantedUnits.length) {
+    // prioritise matching units but show all sensors if pool would be empty
+    const pref = allEntities.filter(e => e.entity_id.startsWith('sensor.') && wantedUnits.some(u => (e.unit||'').toLowerCase().includes(u.toLowerCase())));
+    pool = pref.length ? pref : allEntities.filter(e => e.entity_id.startsWith('sensor.'));
+  } else {
+    pool = allEntities.filter(e => e.entity_id.startsWith('sensor.'));
+  }
+
+  // Set initial display value
+  input.dataset.value = currentVal || '';
+  if (currentVal) {
+    const found = pool.find(e => e.entity_id === currentVal) || allEntities.find(e => e.entity_id === currentVal);
+    input.value = found ? (found.friendly_name || found.entity_id) : currentVal;
+  } else {
+    input.value = '';
+  }
+
+  function renderList(q) {
+    const lq = q.toLowerCase();
+    const matches = pool.filter(e =>
+      !lq ||
+      e.entity_id.toLowerCase().includes(lq) ||
+      (e.friendly_name||'').toLowerCase().includes(lq) ||
+      (e.unit||'').toLowerCase().includes(lq)
+    ).slice(0, 40);
+    list.innerHTML =
+      `<li data-id="" class="cl-none">— none —</li>` +
+      matches.map(e => {
+        const name = e.friendly_name && e.friendly_name !== e.entity_id ? e.friendly_name : e.entity_id;
+        const unit = e.unit ? `<span class="cl-unit">${e.unit}</span>` : '';
+        return `<li data-id="${e.entity_id}" title="${e.entity_id}"><span class="cl-name">${name}</span>${unit}</li>`;
+      }).join('');
+    list.style.display = '';
+  }
+
+  input.addEventListener('focus', () => renderList(input.value === (pool.find(e=>e.entity_id===input.dataset.value)||{}).friendly_name ? '' : input.value));
+  input.addEventListener('input', () => { input.dataset.value = ''; renderList(input.value); });
+  input.addEventListener('keydown', e => {
+    if (e.key==='Escape') { list.style.display='none'; input.blur(); }
+  });
+  input.addEventListener('blur', () => {
+    setTimeout(() => { list.style.display='none'; }, 180);
+    // If user typed but didn't select, restore display name of current value
+    if (!input.dataset.value && currentVal) {
+      const found = pool.find(e=>e.entity_id===currentVal)||allEntities.find(e=>e.entity_id===currentVal);
+      input.value = found ? (found.friendly_name||found.entity_id) : currentVal;
+      input.dataset.value = currentVal;
+    } else if (!input.dataset.value) {
+      input.value = '';
+    }
+  });
+  list.addEventListener('mousedown', ev => {
+    const li = ev.target.closest('li'); if (!li) return;
+    input.dataset.value = li.dataset.id;
+    if (li.dataset.id) {
+      const found = pool.find(e=>e.entity_id===li.dataset.id);
+      input.value = found ? (found.friendly_name||found.entity_id) : li.dataset.id;
+    } else {
+      input.value = '';
+    }
+    list.style.display = 'none';
+    // update currentVal for blur restore
+    currentVal = li.dataset.id;
+  });
+}
+
+function getComboValue(fieldKey) {
+  const input = document.getElementById('s_'+fieldKey);
+  return input ? input.dataset.value : '';
+}
+
+let _allEntities = [];
 
 async function loadSettings() {
   const [settingsRes, entitiesRes] = await Promise.all([
     fetch(BASE+"/api/settings").then(r=>r.json()),
     fetch(BASE+"/api/entities").then(r=>r.json()),
   ]);
-  const sensors  = entitiesRes.entities.filter(e => e.entity_id.startsWith("sensor."));
-  const switches = entitiesRes.entities.filter(e => e.entity_id.startsWith("switch.")||e.entity_id.startsWith("input_boolean."));
+  _allEntities = entitiesRes.entities || [];
 
-  for (const id of SENSOR_SELECTS) {
-    const key = id.replace("s_","");
-    const el = document.getElementById(id); if (el) el.innerHTML = buildOptions(sensors, settingsRes[key]);
-    const v  = document.getElementById("v_"+key); if (v) v.textContent = shorten(settingsRes[key]);
+  // Setup combo fields
+  for (const key of COMBO_FIELDS) {
+    setupCombo(key, _allEntities, settingsRes[key] || '');
+    const v = document.getElementById("v_"+key);
+    if (v) v.textContent = shorten(settingsRes[key]);
   }
-  for (const id of SWITCH_SELECTS) {
-    const key = id.replace("s_","");
-    const el = document.getElementById(id); if (el) el.innerHTML = buildOptions(switches, settingsRes[key]);
-    const v  = document.getElementById("v_"+key); if (v) v.textContent = shorten(settingsRes[key]);
-  }
+
+  // Numeric / time inputs
   const numFmt = {
-    battery_max_charge_w:v=>v+' W', battery_max_discharge_w:v=>v+' W',
-    battery_min_soc:v=>v+'%', battery_max_soc:v=>v+'%',
-    ev_target_soc:v=>v+'%', ev_max_charge_w:v=>v+' W',
-    cheap_threshold:v=>v+' €/kWh', expensive_threshold:v=>v+' €/kWh',
-    update_interval:v=>v+'s', ev_departure_time:v=>v,
+    battery_max_charge_w:   v=>v+' W',      battery_max_discharge_w: v=>v+' W',
+    battery_min_soc:        v=>v+'%',       battery_max_soc:         v=>v+'%',
+    ev_target_soc:          v=>v+'%',       ev_max_charge_w:         v=>v+' W',
+    cheap_threshold:        v=>v+' €/kWh', expensive_threshold:     v=>v+' €/kWh',
+    update_interval:        v=>v+'s',       ev_departure_time:       v=>v,
   };
   for (const [key,fmt] of Object.entries(numFmt)) {
     const el = document.getElementById("s_"+key); if (el&&settingsRes[key]!=null) el.value = settingsRes[key];
-    const v  = document.getElementById("v_"+key);  if (v&&settingsRes[key]!=null)  v.textContent = fmt(settingsRes[key]);
+    const v  = document.getElementById("v_"+key); if (v&&settingsRes[key]!=null)  v.textContent = fmt(settingsRes[key]);
   }
-  const socRange = document.getElementById("v_battery_soc_range");
-  if (socRange) socRange.textContent = `${settingsRes.battery_min_soc??'?'}% – ${settingsRes.battery_max_soc??'?'}%`;
+  const socRange  = document.getElementById("v_battery_soc_range");
+  if (socRange)  socRange.textContent  = `${settingsRes.battery_min_soc??'?'}% – ${settingsRes.battery_max_soc??'?'}%`;
   const maxCharge = document.getElementById("v_battery_max_charge_w");
   if (maxCharge) maxCharge.textContent = `${settingsRes.battery_max_charge_w??'?'} W / ${settingsRes.battery_max_discharge_w??'?'} W`;
 }
@@ -886,8 +989,14 @@ async function saveGroup(keys, groupId) {
   const intKeys   = ['battery_max_charge_w','battery_max_discharge_w','battery_min_soc','battery_max_soc','ev_target_soc','ev_max_charge_w','update_interval'];
   const floatKeys = ['cheap_threshold','expensive_threshold'];
   for (const key of keys) {
-    const el = document.getElementById('s_'+key); if (!el) continue;
-    const val = el.value; if (val==='') continue;
+    let val;
+    if (COMBO_FIELDS.includes(key)) {
+      val = getComboValue(key);   // combo — read dataset.value
+    } else {
+      const el = document.getElementById('s_'+key); if (!el) continue;
+      val = el.value;
+    }
+    if (val === '' || val === undefined) continue;
     body[key] = intKeys.includes(key) ? parseInt(val) : floatKeys.includes(key) ? parseFloat(val) : val;
   }
   await fetch(BASE+'/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
