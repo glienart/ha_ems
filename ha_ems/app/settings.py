@@ -38,6 +38,11 @@ class EmsSettings:
     ev_departure_time: str = "07:00"
     ev_max_charge_w: int = 7400
     tariff_sensor: str = ""
+    # Effective price = a × EPEX + b  (b absorbs grid fees, taxes, margins)
+    tariff_a_consumption: float = 1.0   # multiplier for buy price
+    tariff_b_consumption: float = 0.0   # fixed offset  for buy price (€/kWh)
+    tariff_a_injection: float = 1.0     # multiplier for sell/inject price
+    tariff_b_injection: float = 0.0     # fixed offset  for sell/inject price (€/kWh)
     cheap_threshold: float = 0.10
     expensive_threshold: float = 0.25
     update_interval: int = 60
@@ -77,11 +82,17 @@ def load() -> EmsSettings:
 
 
 def save_runtime(settings: EmsSettings) -> None:
-    """Save only runtime-changeable fields (mode, thresholds)."""
-    runtime_keys = {"mode", "cheap_threshold", "expensive_threshold", "update_interval"}
-    data = {k: v for k, v in asdict(settings).items() if k in runtime_keys}
+    """Save all dashboard-managed settings to settings.json.
+
+    EPEX fields (epex_token, epex_zone) are excluded — they come from
+    the HA add-on Configuration tab (options.json) and must not be
+    overwritten here.
+    """
+    exclude = {"epex_token", "epex_zone"}
+    data = {k: v for k, v in asdict(settings).items() if k not in exclude}
     try:
         with open(RUNTIME_PATH, "w") as f:
             json.dump(data, f, indent=2)
+        _LOGGER.info("Settings saved to %s", RUNTIME_PATH)
     except Exception as exc:
         _LOGGER.error("Failed to save settings.json: %s", exc)
