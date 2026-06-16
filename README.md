@@ -2,7 +2,7 @@
 
 A Home Assistant add-on that optimizes solar self-consumption, battery cycling, and EV charging using a rule-based engine and real-time EPEX SPOT day-ahead prices. Everything is configured from a built-in ingress dashboard — no YAML required.
 
-![Version](https://img.shields.io/badge/version-0.5.5-blue) ![HA](https://img.shields.io/badge/Home%20Assistant-add--on-41BDF5)
+![Version](https://img.shields.io/badge/version-0.5.6-blue) ![HA](https://img.shields.io/badge/Home%20Assistant-add--on-41BDF5)
 
 ---
 
@@ -175,6 +175,7 @@ You can configure any number of vehicles. Each vehicle has its own card in the S
 | Target SOC | 80% | Charge EV up to this level |
 | Departure time | 07:00 | Used to define the overnight charge window (21:00 → departure) |
 | Max charge power | 7400 W | EV charger power limit |
+| Capacity | 40 kWh | Battery capacity — used to calculate urgency (hours needed to reach target SOC) |
 
 Use the **+ Add vehicle** button to add more EVs, and **✕** to remove one. Click **Save fleet** to persist the list.
 
@@ -189,6 +190,9 @@ The optimizer decides each EV independently: if a vehicle is connected (charger 
 | Price sensor | — | Optional static price sensor (EUR/kWh); overridden by live EPEX when configured |
 | Cheap threshold | 0.10 €/kWh | Effective consumption price below which grid charging is triggered |
 | Expensive threshold | 0.25 €/kWh | Effective consumption price above which battery discharge is triggered |
+| Cheap hysteresis | 0.01 €/kWh | Dead-band above cheap threshold before stopping cheap-mode charging (avoids oscillation) |
+| Expensive hysteresis | 0.01 €/kWh | Dead-band below expensive threshold before stopping discharge (avoids oscillation) |
+| Look-ahead slots | 4 | Number of cheapest remaining EPEX slots per day to charge in, even if price is above cheap threshold |
 | Update interval | 60 s | How often the optimizer runs |
 | **Consumption a** | 1.0 | EPEX multiplier for the price you pay when buying from the grid |
 | **Consumption b** | 0.0 €/kWh | Fixed offset for the price you pay (grid fees, taxes, margin) |
@@ -214,11 +218,12 @@ Example for a Belgian Fluvius dynamic contract (approximate):
 Rule priority order, evaluated each cycle:
 
 1. **Battery below min SOC** → force charge from grid, pause all EVs
-2. **Cheap tariff** (effective buy price ≤ cheap threshold) → grid-charge battery and all connected EVs
-3. **Solar surplus** (> 200 W deadband) → charge battery first, then all connected EVs
-4. **Expensive tariff** (effective buy price ≥ expensive threshold) → discharge battery to cover load, pause EVs
-5. **EV overnight window** (21:00 → departure) → charge each EV independently if within its window
-6. **Default** → idle
+2. **EV urgency** → if an EV must charge now to reach its target SOC before departure (based on SOC gap, capacity, and max charge power), charge it immediately regardless of tariff
+3. **Cheap tariff** (with hysteresis) or **EPEX look-ahead optimal slot** → grid-charge battery and all connected EVs
+4. **Solar surplus** (> 200 W deadband) → charge battery first, then all connected EVs
+5. **Expensive tariff** (with hysteresis) → discharge battery to cover load, pause EVs
+6. **EV overnight window** (21:00 → departure) → charge each EV independently if within its window
+7. **Default** → idle
 
 ### ECO
 

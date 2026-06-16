@@ -146,6 +146,7 @@ async def run_optimizer():
             target_soc=float(ev_cfg.get("target_soc", 80)),
             departure_time=ev_cfg.get("departure_time", "07:00"),
             max_charge_w=float(ev_cfg.get("max_charge_w", 7400)),
+            capacity_kwh=float(ev_cfg.get("capacity_kwh", 40)),
             connected=connected,
         ))
 
@@ -162,6 +163,10 @@ async def run_optimizer():
         tariff_eur_kwh=effective_consumption,
         cheap_threshold=s.cheap_threshold,
         expensive_threshold=s.expensive_threshold,
+        cheap_hysteresis=s.cheap_hysteresis,
+        expensive_hysteresis=s.expensive_hysteresis,
+        cheap_lookahead_slots=s.cheap_lookahead_slots,
+        epex_prices_today=_epex_data.get("prices_today", []) if _epex_data else [],
         mode=s.mode,
         now=datetime.now(),
     )
@@ -634,6 +639,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="sg-row"><span class="sg-key">Conso b (&#8364;/kWh)</span><span id="v_tariff_b_consumption" class="sg-val">&#8212;</span></div>
         <div class="sg-row"><span class="sg-key">Inject a (&#xD7;EPEX)</span><span id="v_tariff_a_injection" class="sg-val">&#8212;</span></div>
         <div class="sg-row"><span class="sg-key">Inject b (&#8364;/kWh)</span><span id="v_tariff_b_injection" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Hysteresis cheap/exp</span><span id="v_cheap_hysteresis" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Look-ahead slots</span><span id="v_cheap_lookahead_slots" class="sg-val">&#8212;</span></div>
       </div>
       <div id="sg-tariff-edit" class="sg-edit" style="display:none">
         <div class="field"><label>Price sensor (EUR/kWh, optional)</label><div class="combo"><input class="combo-input" id="s_tariff_sensor" placeholder="Search price sensor..." autocomplete="off"><ul class="combo-list" id="sl_tariff_sensor"></ul></div></div>
@@ -645,7 +652,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="field"><label>Consommation b (fixe, &#8364;/kWh)</label><input type="number" id="s_tariff_b_consumption" step="0.001" min="-1" max="1"></div>
         <div class="field"><label>Injection a (multiplicateur EPEX)</label><input type="number" id="s_tariff_a_injection" step="0.001" min="0" max="10"></div>
         <div class="field"><label>Injection b (fixe, &#8364;/kWh)</label><input type="number" id="s_tariff_b_injection" step="0.001" min="-1" max="1"></div>
-        <button class="save-btn" onclick="saveGroup(['tariff_sensor','cheap_threshold','expensive_threshold','update_interval','tariff_a_consumption','tariff_b_consumption','tariff_a_injection','tariff_b_injection'],'sg-tariff')">Save</button>
+        <div class="field"><label>Hystérésis cheap (&#8364;/kWh)</label><input type="number" id="s_cheap_hysteresis" step="0.001" min="0" max="0.1"></div>
+        <div class="field"><label>Hystérésis expensive (&#8364;/kWh)</label><input type="number" id="s_expensive_hysteresis" step="0.001" min="0" max="0.1"></div>
+        <div class="field"><label>Look-ahead slots (N meilleurs slots EPEX)</label><input type="number" id="s_cheap_lookahead_slots" min="0" max="24"></div>
+        <button class="save-btn" onclick="saveGroup(['tariff_sensor','cheap_threshold','expensive_threshold','cheap_hysteresis','expensive_hysteresis','cheap_lookahead_slots','update_interval','tariff_a_consumption','tariff_b_consumption','tariff_a_injection','tariff_b_injection'],'sg-tariff')">Save</button>
       </div>
     </div>
 
@@ -992,6 +1002,8 @@ async function loadSettings() {
     battery_max_charge_w:   v=>v+' W',      battery_max_discharge_w: v=>v+' W',
     battery_min_soc:        v=>v+'%',       battery_max_soc:         v=>v+'%',
     cheap_threshold:        v=>v+' €/kWh', expensive_threshold: v=>v+' €/kWh',
+    cheap_hysteresis:       v=>v+' €/kWh', expensive_hysteresis: v=>v+' €/kWh',
+    cheap_lookahead_slots:  v=>v+' slots',
     update_interval:        v=>v+'s',
     tariff_a_consumption:   v=>'×'+v,  tariff_b_consumption:    v=>(v>=0?'+':'')+v+' €/kWh',
     tariff_a_injection:     v=>'×'+v,  tariff_b_injection:      v=>(v>=0?'+':'')+v+' €/kWh',
@@ -1004,6 +1016,10 @@ async function loadSettings() {
   if (socRange)  socRange.textContent  = (settingsRes.battery_min_soc??'?')+'% – '+(settingsRes.battery_max_soc??'?')+'%';
   const maxCharge = document.getElementById("v_battery_max_charge_w");
   if (maxCharge) maxCharge.textContent = (settingsRes.battery_max_charge_w??'?')+' W / '+(settingsRes.battery_max_discharge_w??'?')+' W';
+  const hystEl = document.getElementById("v_cheap_hysteresis");
+  if (hystEl) hystEl.textContent = (settingsRes.cheap_hysteresis??'?')+' / '+(settingsRes.expensive_hysteresis??'?')+' €/kWh';
+  const lookaheadEl = document.getElementById("v_cheap_lookahead_slots");
+  if (lookaheadEl) lookaheadEl.textContent = (settingsRes.cheap_lookahead_slots??'?')+' slots';
 
   _currentEvs = settingsRes.evs || [];
   renderEvFleet(_currentEvs);
@@ -1020,8 +1036,8 @@ function toggleEdit(id) {
 
 async function saveGroup(keys, groupId) {
   const body = {};
-  const intKeys   = ['battery_max_charge_w','battery_max_discharge_w','battery_min_soc','battery_max_soc','update_interval'];
-  const floatKeys = ['cheap_threshold','expensive_threshold','tariff_a_consumption','tariff_b_consumption','tariff_a_injection','tariff_b_injection'];
+  const intKeys   = ['battery_max_charge_w','battery_max_discharge_w','battery_min_soc','battery_max_soc','update_interval','cheap_lookahead_slots'];
+  const floatKeys = ['cheap_threshold','expensive_threshold','cheap_hysteresis','expensive_hysteresis','tariff_a_consumption','tariff_b_consumption','tariff_a_injection','tariff_b_injection'];
   for (const key of keys) {
     let val;
     if (COMBO_FIELDS.includes(key)) {
@@ -1073,10 +1089,11 @@ function _evEntryHtml(i, ev) {
     +'<div class="field"><label>Name</label><input type="text" id="ev_name_'+i+'" value="'+(ev.name||'')+'"></div>'
     +'<div class="field"><label>Charger switch</label><div class="combo"><input class="combo-input" id="s_ev_charger_'+i+'" placeholder="Search switch..." autocomplete="off"><ul class="combo-list" id="sl_ev_charger_'+i+'"></ul></div></div>'
     +'<div class="field"><label>SOC sensor (%)</label><div class="combo"><input class="combo-input" id="s_ev_soc_'+i+'" placeholder="Search % sensor..." autocomplete="off"><ul class="combo-list" id="sl_ev_soc_'+i+'"></ul></div></div>'
-    +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.4rem">'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.4rem">'
     +'<div class="field"><label>Target SOC (%)</label><input type="number" id="ev_target_soc_'+i+'" value="'+(ev.target_soc!=null?ev.target_soc:80)+'" min="20" max="100"></div>'
     +'<div class="field"><label>Departure</label><input type="time" id="ev_departure_'+i+'" value="'+(ev.departure_time||'07:00')+'"></div>'
     +'<div class="field"><label>Max (W)</label><input type="number" id="ev_max_w_'+i+'" value="'+(ev.max_charge_w!=null?ev.max_charge_w:7400)+'" min="1000" max="22000"></div>'
+    +'<div class="field"><label>Capacité (kWh)</label><input type="number" id="ev_capacity_'+i+'" value="'+(ev.capacity_kwh!=null?ev.capacity_kwh:40)+'" min="5" max="200"></div>'
     +'</div></div>';
 }
 
@@ -1110,6 +1127,7 @@ async function saveEvFleet() {
       target_soc:     parseInt((document.getElementById('ev_target_soc_'+i)||{value:80}).value),
       departure_time: (document.getElementById('ev_departure_'+i)||{value:'07:00'}).value,
       max_charge_w:   parseInt((document.getElementById('ev_max_w_'+i)||{value:7400}).value),
+      capacity_kwh:   parseFloat((document.getElementById('ev_capacity_'+i)||{value:40}).value),
     });
   });
   await fetch(BASE+'/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({evs: evs})});

@@ -40,6 +40,9 @@ class EmsSettings:
     tariff_b_injection: float = 0.0
     cheap_threshold: float = 0.10
     expensive_threshold: float = 0.25
+    cheap_hysteresis: float = 0.01
+    expensive_hysteresis: float = 0.01
+    cheap_lookahead_slots: int = 4
     update_interval: int = 60
     mode: str = "auto"
     epex_token: str = ""
