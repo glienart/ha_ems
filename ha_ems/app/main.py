@@ -500,10 +500,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .ha-e-node.home{align-items:center}
   .ha-e-node.home .ha-e-label{order:1}
   .ha-e-lines{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0;overflow:visible}
-  .ha-e-path{fill:none;stroke-width:1;vector-effect:non-scaling-stroke}
-  .p-solar{stroke:#ff9800}.p-return{stroke:#488fc2}.p-grid{stroke:#488fc2}
-  .p-bat-home{stroke:#4db6ac}.p-bat-grid{stroke:#4db6ac}
-  .d-solar{fill:#ff9800}.d-return{fill:#488fc2}.d-grid{fill:#488fc2}
+  .ha-e-path{fill:none;stroke-width:2;stroke:transparent;vector-effect:non-scaling-stroke;transition:stroke 0.4s}
+  .d-solar{fill:#ff9800}.d-return{fill:#ff9800}.d-grid{fill:#488fc2}
   .d-bat-home{fill:#4db6ac}.d-bat-grid{fill:#4db6ac}
   .epex-pills{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;margin-bottom:.75rem}
   .pill{background:var(--bg);border:1px solid var(--border);border-radius:.5rem;padding:.4rem .6rem;text-align:center}
@@ -715,16 +713,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <span class="ha-e-label">Battery</span>
         </div>
         <svg class="ha-e-lines" viewBox="0 0 100 100" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-          <path id="epl-solar"    class="ha-e-path p-solar"    d="M50,10 C50,35 90,35 90,50"/>
-          <path id="epl-return"   class="ha-e-path p-return"   d="M50,10 C50,35 10,35 10,50"/>
-          <path id="epl-grid"     class="ha-e-path p-grid"     d="M10,50 H90"/>
-          <path id="epl-bat-home" class="ha-e-path p-bat-home" d="M50,90 C50,65 90,65 90,50"/>
-          <path id="epl-bat-grid" class="ha-e-path p-bat-grid" d="M50,90 C50,65 10,65 10,50"/>
-          <circle r="1.2" class="d-solar"    id="edot-solar"    style="display:none"><animateMotion dur="2.8s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-solar"/></animateMotion></circle>
-          <circle r="1.2" class="d-return"   id="edot-return"   style="display:none"><animateMotion dur="3.2s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-return"/></animateMotion></circle>
-          <circle r="1.2" class="d-grid"     id="edot-grid"     style="display:none"><animateMotion dur="4s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-grid"/></animateMotion></circle>
-          <circle r="1.2" class="d-bat-home" id="edot-bat-home" style="display:none"><animateMotion dur="3.5s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-home"/></animateMotion></circle>
-          <circle r="1.2" class="d-bat-grid" id="edot-bat-grid" style="display:none"><animateMotion dur="4s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-grid"/></animateMotion></circle>
+          <path id="epl-solar"    class="ha-e-path"    d="M50,10 C50,35 90,35 90,50"/>
+          <path id="epl-return"   class="ha-e-path"   d="M50,10 C50,35 10,35 10,50"/>
+          <path id="epl-grid"     class="ha-e-path"     d="M10,50 H90"/>
+          <path id="epl-bat-home" class="ha-e-path" d="M50,90 C50,65 90,65 90,50"/>
+          <path id="epl-bat-grid" class="ha-e-path" d="M50,90 C50,65 10,65 10,50"/>
+          <circle r="1.8" class="d-solar"    id="edot-solar"    style="display:none"><animateMotion dur="2.8s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-solar"/></animateMotion></circle>
+          <circle r="1.8" class="d-return"   id="edot-return"   style="display:none"><animateMotion dur="3.2s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-return"/></animateMotion></circle>
+          <circle r="1.8" class="d-grid"     id="edot-grid"     style="display:none"><animateMotion dur="4s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-grid"/></animateMotion></circle>
+          <circle r="1.8" class="d-bat-home" id="edot-bat-home" style="display:none"><animateMotion dur="3.5s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-home"/></animateMotion></circle>
+          <circle r="1.8" class="d-bat-grid" id="edot-bat-grid" style="display:none"><animateMotion dur="4s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-grid"/></animateMotion></circle>
         </svg>
       </div>
     </div>
@@ -840,6 +838,12 @@ async function refresh() {
 function updateFlow(d) {
   const set  = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
   const show = (id,on) => { const el=document.getElementById(id); if(el) el.style.display = on ? 'inline' : 'none'; };
+  const setFlow = (pathId, dotId, active, color) => {
+    const p = document.getElementById(pathId);
+    const d2 = document.getElementById(dotId);
+    if (p)  p.style.stroke  = active ? color : 'transparent';
+    if (d2) d2.style.display = active ? 'inline' : 'none';
+  };
 
   const solar   = d.solar_w ?? 0;
   const grid    = d.grid_w  ?? 0;
@@ -873,11 +877,13 @@ function updateFlow(d) {
   set('ec-bat',      batSoc!=null ? batSoc+'%' : '--');
   set('ec-bat-dec',  batSub);
 
-  show('edot-solar',    solar > 50);
-  show('edot-return',   grid < -50);
-  show('edot-grid',     grid >  50);
-  show('edot-bat-home', batDischarging);
-  show('edot-bat-grid', batDischarging && grid < -50);
+  // Animated flow paths: show path stroke + dot only when flow is active
+  // PV→Grid export is orange (solar power), Grid→Home import is blue
+  setFlow('epl-solar',    'edot-solar',    solar > 50,                   '#ff9800');
+  setFlow('epl-return',   'edot-return',   grid < -50,                   '#ff9800');
+  setFlow('epl-grid',     'edot-grid',     grid >  50,                   '#488fc2');
+  setFlow('epl-bat-home', 'edot-bat-home', batDischarging,               '#4db6ac');
+  setFlow('epl-bat-grid', 'edot-bat-grid', batDischarging && grid < -50, '#4db6ac');
 }
 
 document.querySelectorAll(".mode-btn").forEach(btn => {
