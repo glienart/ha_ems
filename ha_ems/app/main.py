@@ -1,12 +1,5 @@
 """
 HA EMS Add-on -- FastAPI application.
-
-Endpoints:
-  GET  /           -> dashboard HTML
-  GET  /api/state  -> current EMS state (JSON)
-  GET  /api/settings -> current settings (JSON)
-  POST /api/settings -> update settings
-  POST /api/mode   -> change EMS mode quickly
 """
 from __future__ import annotations
 
@@ -24,33 +17,23 @@ from pydantic import BaseModel
 from . import ha_client, settings as settings_module
 from .energy_html import ENERGY_HTML
 from .epex import fetch_prices, resolve_zone
-from .optimizer import EmsOptimizer, EmsSnapshot
+from .optimizer import EmsOptimizer, EmsSnapshot, EvSnapshot
 from .settings import EmsSettings
 
 logging.basicConfig(level=logging.INFO)
 _LOGGER = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Global state
-# ---------------------------------------------------------------------------
-
 _settings: EmsSettings = settings_module.load()
 _optimizer = EmsOptimizer()
 _last_state: dict = {}
 _loop_task: Optional[asyncio.Task] = None
-_epex_data: dict = {}          # latest EPEX price data
+_epex_data: dict = {}
 _epex_task: Optional[asyncio.Task] = None
 
-
-# ---------------------------------------------------------------------------
-# Lifespan -- start/stop background loop
-# ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _loop_task, _epex_task
-    # Persist whatever was loaded (options.json + settings.json) back to
-    # settings.json so all fields survive future restarts/updates.
     settings_module.save_runtime(_settings)
     _LOGGER.info("Settings persisted to disk on startup")
     _loop_task = asyncio.create_task(ems_loop())
@@ -69,12 +52,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="HA EMS", lifespan=lifespan)
 
 
-# ---------------------------------------------------------------------------
-# Optimizer loop
-# ---------------------------------------------------------------------------
-
 async def ems_loop():
-    """Run the optimizer every update_interval seconds."""
     while True:
         try:
             await run_optimizer()
@@ -86,7 +64,6 @@ async def ems_loop():
 
 
 async def epex_loop():
-    """Fetch EPEX prices every 15 minutes and publish to HA."""
     global _epex_data
     while True:
         try:
@@ -94,86 +71,59 @@ async def epex_loop():
             if data:
                 _epex_data = data
                 await _publish_epex(data)
-                _LOGGER.info(
-                    "EPEX price updated: %.4f EUR/kWh (zone %s)",
-                    data.get("current_price") or 0,
-                    _settings.epex_zone,
-                )
+                _LOGGER.info("EPEX price updated: %.4f EUR/kWh (zone %s)",
+                             data.get("current_price") or 0, _settings.epex_zone)
         except asyncio.CancelledError:
             break
         except Exception as exc:
             _LOGGER.error("EPEX loop error: %s", exc)
-        await asyncio.sleep(15 * 60)  # refresh every 15 min
+        await asyncio.sleep(15 * 60)
 
 
 async def _publish_epex(data: dict) -> None:
-    """Push EPEX prices as virtual sensors to HA."""
     def _fmt(v):
         return str(round(v, 4)) if v is not None else "unavailable"
 
     sensors = {
-        "sensor.ha_ems_epex_current_price":   (data.get("current_price"),   "EPEX Current Price",    "EUR/kWh"),
-        "sensor.ha_ems_epex_next_slot_price":  (data.get("next_slot_price"), "EPEX Next Slot Price",  "EUR/kWh"),
-        "sensor.ha_ems_epex_today_min":        (data.get("today_min"),       "EPEX Today Min",        "EUR/kWh"),
-        "sensor.ha_ems_epex_today_max":        (data.get("today_max"),       "EPEX Today Max",        "EUR/kWh"),
-        "sensor.ha_ems_epex_today_avg":        (data.get("today_avg"),       "EPEX Today Avg",        "EUR/kWh"),
-        "sensor.ha_ems_epex_tomorrow_min":     (data.get("tomorrow_min"),    "EPEX Tomorrow Min",     "EUR/kWh"),
-        "sensor.ha_ems_epex_tomorrow_max":     (data.get("tomorrow_max"),    "EPEX Tomorrow Max",     "EUR/kWh"),
+        "sensor.ha_ems_epex_current_price":   (data.get("current_price"),   "EPEX Current Price",   "EUR/kWh"),
+        "sensor.ha_ems_epex_next_slot_price":  (data.get("next_slot_price"), "EPEX Next Slot Price", "EUR/kWh"),
+        "sensor.ha_ems_epex_today_min":        (data.get("today_min"),       "EPEX Today Min",       "EUR/kWh"),
+        "sensor.ha_ems_epex_today_max":        (data.get("today_max"),       "EPEX Today Max",       "EUR/kWh"),
+        "sensor.ha_ems_epex_today_avg":        (data.get("today_avg"),       "EPEX Today Avg",       "EUR/kWh"),
+        "sensor.ha_ems_epex_tomorrow_min":     (data.get("tomorrow_min"),    "EPEX Tomorrow Min",    "EUR/kWh"),
+        "sensor.ha_ems_epex_tomorrow_max":     (data.get("tomorrow_max"),    "EPEX Tomorrow Max",    "EUR/kWh"),
     }
     for entity_id, (value, name, unit) in sensors.items():
-        await ha_client.set_entity_state(
-            entity_id,
-            _fmt(value),
-            {
-                "friendly_name":       name,
-                "unit_of_measurement": unit,
-                "icon":                "mdi:currency-eur",
-                "device_class":        "monetary",
-                "state_class":         "measurement",
-            },
-        )
-    # Full schedule as attributes on the current price sensor
+        await ha_client.set_entity_state(entity_id, _fmt(value),
+            {"friendly_name": name, "unit_of_measurement": unit,
+             "icon": "mdi:currency-eur", "device_class": "monetary", "state_class": "measurement"})
     if data.get("prices_today"):
         await ha_client.set_entity_state(
-            "sensor.ha_ems_epex_current_price",
-            _fmt(data.get("current_price")),
-            {
-                "friendly_name":       "EPEX Current Price",
-                "unit_of_measurement": "EUR/kWh",
-                "icon":                "mdi:currency-eur",
-                "device_class":        "monetary",
-                "state_class":         "measurement",
-                "zone":                _settings.epex_zone,
-                "slot_minutes":        data.get("slot_minutes"),
-                "today_min":           data.get("today_min"),
-                "today_max":           data.get("today_max"),
-                "today_avg":           data.get("today_avg"),
-                "tomorrow_min":        data.get("tomorrow_min"),
-                "tomorrow_max":        data.get("tomorrow_max"),
-                "prices_today":        data.get("prices_today", []),
-                "prices_tomorrow":     data.get("prices_tomorrow", []),
-            },
-        )
+            "sensor.ha_ems_epex_current_price", _fmt(data.get("current_price")),
+            {"friendly_name": "EPEX Current Price", "unit_of_measurement": "EUR/kWh",
+             "icon": "mdi:currency-eur", "device_class": "monetary", "state_class": "measurement",
+             "zone": _settings.epex_zone, "slot_minutes": data.get("slot_minutes"),
+             "today_min": data.get("today_min"), "today_max": data.get("today_max"),
+             "today_avg": data.get("today_avg"), "tomorrow_min": data.get("tomorrow_min"),
+             "tomorrow_max": data.get("tomorrow_max"),
+             "prices_today": data.get("prices_today", []),
+             "prices_tomorrow": data.get("prices_tomorrow", [])})
 
 
 async def run_optimizer():
     global _last_state
     s = _settings
 
-    # Read HA states
-    solar_w = await ha_client.get_float(s.solar_power_sensor)
-    grid_w = await ha_client.get_float(s.grid_power_sensor)
-    house_w = await ha_client.get_float(s.house_power_sensor) if s.house_power_sensor else None
+    solar_w   = await ha_client.get_float(s.solar_power_sensor)
+    grid_w    = await ha_client.get_float(s.grid_power_sensor)
+    house_w   = await ha_client.get_float(s.house_power_sensor) if s.house_power_sensor else None
     bat_soc   = await ha_client.get_float(s.battery_soc_sensor, default=50.0)
     bat_power = await ha_client.get_float(s.battery_power_sensor) if s.battery_power_sensor else None
-    ev_soc = await ha_client.get_float(s.ev_soc_sensor) if s.ev_soc_sensor else None
-    ev_connected = await ha_client.get_bool(s.ev_charger_switch) if s.ev_charger_switch else False
-    tariff = await ha_client.get_float(s.tariff_sensor) if s.tariff_sensor else None
-    # Live EPEX price overrides static tariff sensor
+    tariff    = await ha_client.get_float(s.tariff_sensor) if s.tariff_sensor else None
+
     if _epex_data and _epex_data.get("current_price") is not None:
         tariff = _epex_data["current_price"]
 
-    # Apply ax+b formula — effective prices are what the user actually pays/receives
     epex_raw = tariff
     if tariff is not None:
         effective_consumption = tariff * s.tariff_a_consumption + s.tariff_b_consumption
@@ -181,6 +131,23 @@ async def run_optimizer():
     else:
         effective_consumption = None
         effective_injection   = None
+
+    ev_snapshots: list[EvSnapshot] = []
+    for ev_cfg in s.evs:
+        soc_sensor = ev_cfg.get("soc_sensor", "")
+        charger_sw = ev_cfg.get("charger_switch", "")
+        ev_soc = await ha_client.get_float(soc_sensor) if soc_sensor else None
+        ev_on  = await ha_client.get_bool(charger_sw)  if charger_sw  else False
+        connected = ev_on or (ev_soc is not None and ev_soc < 100)
+        ev_snapshots.append(EvSnapshot(
+            name=ev_cfg.get("name", "EV"),
+            charger_switch=charger_sw,
+            soc_pct=ev_soc,
+            target_soc=float(ev_cfg.get("target_soc", 80)),
+            departure_time=ev_cfg.get("departure_time", "07:00"),
+            max_charge_w=float(ev_cfg.get("max_charge_w", 7400)),
+            connected=connected,
+        ))
 
     snap = EmsSnapshot(
         solar_power_w=solar_w,
@@ -191,11 +158,7 @@ async def run_optimizer():
         battery_max_soc=s.battery_max_soc,
         battery_max_charge_w=s.battery_max_charge_w,
         battery_max_discharge_w=s.battery_max_discharge_w,
-        ev_connected=ev_connected or (ev_soc is not None),
-        ev_soc_pct=ev_soc,
-        ev_target_soc=s.ev_target_soc,
-        ev_departure_time=s.ev_departure_time,
-        ev_max_charge_w=s.ev_max_charge_w,
+        evs=ev_snapshots,
         tariff_eur_kwh=effective_consumption,
         cheap_threshold=s.cheap_threshold,
         expensive_threshold=s.expensive_threshold,
@@ -205,7 +168,6 @@ async def run_optimizer():
 
     decision = _optimizer.decide(snap)
 
-    # Apply battery decision
     bat = decision.battery
     if s.battery_charge_switch:
         if bat == "charge":
@@ -223,45 +185,48 @@ async def run_optimizer():
         else:
             await ha_client.turn_off(s.battery_standby_switch)
 
-    # Apply EV decision
-    if s.ev_charger_switch:
-        if decision.ev == "charge":
-            await ha_client.turn_on(s.ev_charger_switch)
+    for ev_dec in decision.ev_decisions:
+        sw = ev_dec.get("charger_switch", "")
+        if not sw:
+            continue
+        if ev_dec["decision"] == "charge":
+            await ha_client.turn_on(sw)
         else:
-            await ha_client.turn_off(s.ev_charger_switch)
+            await ha_client.turn_off(sw)
 
-    # Publish virtual sensors to HA
-    await ha_client.set_entity_state(
-        "sensor.ha_ems_mode", s.mode,
-        {"friendly_name": "EMS Mode", "icon": "mdi:tune"}
-    )
-    await ha_client.set_entity_state(
-        "sensor.ha_ems_battery_decision", bat,
-        {"friendly_name": "EMS Battery Decision", "icon": "mdi:battery-charging"}
-    )
-    await ha_client.set_entity_state(
-        "sensor.ha_ems_ev_decision", decision.ev,
-        {"friendly_name": "EMS EV Decision", "icon": "mdi:car-electric"}
-    )
-    await ha_client.set_entity_state(
-        "sensor.ha_ems_solar_surplus", str(round(decision.solar_surplus_w)),
-        {"friendly_name": "EMS Solar Surplus", "unit_of_measurement": "W", "icon": "mdi:solar-power"}
-    )
-    await ha_client.set_entity_state(
-        "sensor.ha_ems_reason", decision.reason,
-        {"friendly_name": "EMS Last Reason"}
-    )
+    await ha_client.set_entity_state("sensor.ha_ems_mode", s.mode,
+        {"friendly_name": "EMS Mode", "icon": "mdi:tune"})
+    await ha_client.set_entity_state("sensor.ha_ems_battery_decision", bat,
+        {"friendly_name": "EMS Battery Decision", "icon": "mdi:battery-charging"})
+    await ha_client.set_entity_state("sensor.ha_ems_solar_surplus", str(round(decision.solar_surplus_w)),
+        {"friendly_name": "EMS Solar Surplus", "unit_of_measurement": "W", "icon": "mdi:solar-power"})
+    await ha_client.set_entity_state("sensor.ha_ems_reason", decision.reason,
+        {"friendly_name": "EMS Last Reason"})
+
+    for ev_snap, ev_dec in zip(ev_snapshots, decision.ev_decisions):
+        safe_name = ev_snap.name.lower().replace(" ", "_").replace("-", "_")
+        await ha_client.set_entity_state(
+            f"sensor.ha_ems_ev_{safe_name}_decision", ev_dec["decision"],
+            {"friendly_name": f"EMS {ev_snap.name} Decision", "icon": "mdi:car-electric"})
+
+    ev_state_list = []
+    for ev_snap, ev_dec in zip(ev_snapshots, decision.ev_decisions):
+        ev_state_list.append({
+            "name": ev_snap.name,
+            "decision": ev_dec["decision"],
+            "soc": round(ev_snap.soc_pct) if ev_snap.soc_pct is not None else None,
+            "connected": ev_snap.connected,
+        })
 
     _last_state = {
         "mode": s.mode,
         "battery": bat,
-        "ev": decision.ev,
+        "evs": ev_state_list,
         "solar_surplus_w": round(decision.solar_surplus_w),
         "net_power_w": round(decision.net_power_w),
         "solar_w": round(solar_w),
         "grid_w": round(grid_w),
         "battery_soc": round(bat_soc),
-        "ev_soc": round(ev_soc) if ev_soc is not None else None,
         "tariff": round(effective_consumption, 4) if effective_consumption is not None else None,
         "tariff_injection": round(effective_injection, 4) if effective_injection is not None else None,
         "epex_raw": round(epex_raw, 4) if epex_raw is not None else None,
@@ -273,10 +238,6 @@ async def run_optimizer():
     _LOGGER.info("EMS: %s", decision.reason)
 
 
-# ---------------------------------------------------------------------------
-# API routes
-# ---------------------------------------------------------------------------
-
 @app.get("/api/state")
 async def api_state():
     return JSONResponse(_last_state)
@@ -284,16 +245,13 @@ async def api_state():
 
 @app.get("/api/epex")
 async def api_epex():
-    """Return the latest EPEX price data."""
-    return JSONResponse(_epex_data or {"error": "No EPEX data — check token and zone in settings"})
+    return JSONResponse(_epex_data or {"error": "No EPEX data -- check token and zone in settings"})
 
 
 @app.get("/api/power_history")
 async def api_power_history():
-    """Return today's power history for Solar / Grid / Battery / House sensors."""
     now_local = datetime.now()
     start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-
     roles = {
         "solar":   _settings.solar_power_sensor,
         "grid":    _settings.grid_power_sensor,
@@ -302,16 +260,12 @@ async def api_power_history():
     }
     id_to_role = {v: k for k, v in roles.items() if v}
     sensors = list(id_to_role.keys())
-
     if not sensors:
         return JSONResponse({"series": {}})
 
     url = f"{ha_client.HA_API}/history/period/{start.isoformat()}"
-    params = {
-        "filter_entity_id": ",".join(sensors),
-        "minimal_response": "true",
-        "significant_changes_only": "false",
-    }
+    params = {"filter_entity_id": ",".join(sensors), "minimal_response": "true",
+              "significant_changes_only": "false"}
     try:
         import httpx as _httpx
         async with _httpx.AsyncClient(timeout=30) as client:
@@ -327,7 +281,6 @@ async def api_power_history():
     for entity_history in data:
         if not entity_history:
             continue
-        # First entry always has entity_id
         entity_id = entity_history[0].get("entity_id", "")
         role = id_to_role.get(entity_id)
         if not role:
@@ -338,7 +291,6 @@ async def api_power_history():
             ts  = state.get("last_changed") or state.get("lc") or state.get("lu") or ""
             try:
                 val = float(raw)
-                # Newer HA returns lc/lu as epoch float seconds
                 if isinstance(ts, (int, float)):
                     from datetime import timezone as _tz
                     ts = datetime.fromtimestamp(ts, tz=_tz.utc).isoformat()
@@ -347,7 +299,6 @@ async def api_power_history():
                 pass
         if points:
             series[role] = points
-
     return JSONResponse({"series": series})
 
 
@@ -370,11 +321,7 @@ class SettingsUpdate(BaseModel):
     battery_max_discharge_w: Optional[int] = None
     battery_min_soc: Optional[int] = None
     battery_max_soc: Optional[int] = None
-    ev_charger_switch: Optional[str] = None
-    ev_soc_sensor: Optional[str] = None
-    ev_target_soc: Optional[int] = None
-    ev_departure_time: Optional[str] = None
-    ev_max_charge_w: Optional[int] = None
+    evs: Optional[list] = None
     tariff_sensor: Optional[str] = None
     tariff_a_consumption: Optional[float] = None
     tariff_b_consumption: Optional[float] = None
@@ -389,11 +336,12 @@ class SettingsUpdate(BaseModel):
 async def api_update_settings(body: SettingsUpdate):
     global _settings
     data = body.model_dump(exclude_none=True)
+    if "evs" in data:
+        _settings.evs = data.pop("evs")
     for k, v in data.items():
         if hasattr(_settings, k):
             setattr(_settings, k, v)
     settings_module.save_runtime(_settings)
-    # Restart loop with new interval
     if _loop_task and "update_interval" in data:
         _loop_task.cancel()
         asyncio.create_task(ems_loop())
@@ -417,10 +365,6 @@ async def api_set_mode(body: ModeUpdate):
     return JSONResponse({"ok": True, "mode": body.mode})
 
 
-# ---------------------------------------------------------------------------
-# Dashboard UI
-# ---------------------------------------------------------------------------
-
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
     return HTMLResponse(DASHBOARD_HTML)
@@ -431,10 +375,8 @@ async def energy_dashboard():
     return HTMLResponse(ENERGY_HTML)
 
 
-
 @app.get("/api/entities")
 async def api_entities(device_class: str = ""):
-    """Return all HA entity IDs, optionally filtered by device_class."""
     url = f"{ha_client.HA_API}/states"
     try:
         async with __import__("httpx").AsyncClient(timeout=10) as client:
@@ -449,13 +391,11 @@ async def api_entities(device_class: str = ""):
             dc = attrs.get("device_class", "")
             if device_class and dc != device_class:
                 continue
-            entities.append({
-                "entity_id": eid,
-                "friendly_name": attrs.get("friendly_name", eid),
-                "state": s.get("state", ""),
-                "device_class": dc,
-                "unit": attrs.get("unit_of_measurement", ""),
-            })
+            entities.append({"entity_id": eid,
+                             "friendly_name": attrs.get("friendly_name", eid),
+                             "state": s.get("state", ""),
+                             "device_class": dc,
+                             "unit": attrs.get("unit_of_measurement", "")})
         entities.sort(key=lambda x: x["entity_id"])
         return JSONResponse({"entities": entities})
     except Exception as exc:
@@ -481,12 +421,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;padding:1rem}
-  /* Nav */
   nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem;border-bottom:1px solid var(--border);padding-bottom:.75rem}
   .nav-btn{padding:.35rem .85rem;border-radius:.5rem;border:1px solid transparent;background:none;color:var(--muted);cursor:pointer;font-size:.85rem}
   .nav-btn.active{background:var(--card);border-color:var(--border);color:var(--text)}
   .nav-settings{font-size:1.1rem;padding:.25rem .6rem;border:1px solid var(--border)!important;border-radius:.5rem}
-  /* Cards */
   .page{display:none}.page.active{display:block}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem;margin-bottom:1rem}
   .card{background:var(--card);border:1px solid var(--border);border-radius:.75rem;padding:1rem}
@@ -514,7 +452,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 2s infinite;display:inline-block}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
   h1{font-size:1.2rem;font-weight:600;margin-bottom:1rem;display:flex;align-items:center;gap:.5rem}
-  /* Settings */
   .settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem;margin-bottom:1rem}
   .settings-group{background:var(--card);border:1px solid var(--border);border-radius:.75rem;padding:1rem}
   .sg-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem}
@@ -526,7 +463,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .sg-key{color:var(--muted)}
   .sg-val{color:var(--text);font-weight:500;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
   .sg-edit{margin-top:.5rem;padding-top:.5rem;border-top:1px solid var(--border)}
-  /* Combo search */
   .combo{position:relative}
   .combo-input{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:.4rem .6rem;border-radius:.4rem;font-size:.82rem}
   .combo-input:focus{outline:none;border-color:var(--accent)}
@@ -544,7 +480,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .save-btn{background:var(--accent);color:#fff;border:none;padding:.4rem 1rem;border-radius:.5rem;cursor:pointer;font-size:.82rem;font-weight:600;margin-top:.25rem}
   .save-btn:hover{opacity:.9}
   .toast{position:fixed;bottom:1rem;right:1rem;background:var(--accent);color:#fff;padding:.5rem 1rem;border-radius:.5rem;font-size:.85rem;display:none;z-index:999}
-  /* Energy — HA-style distribution card */
   .ha-e-wrap{position:relative;height:400px;max-width:400px;margin:0 auto .75rem}
   .ha-e-node{position:absolute;display:flex;flex-direction:column;align-items:center;gap:.25rem;z-index:1}
   .ha-e-node.solar{top:0;left:calc(50% - 40px)}
@@ -559,22 +494,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .ha-e-val{font-size:.82rem;font-weight:700;color:var(--text)}
   .ha-e-sub{font-size:.65rem;color:var(--muted)}
   .ha-e-label{font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
-  /* solar label above */
   .ha-e-node.solar{flex-direction:column}
   .ha-e-node.solar .ha-e-label{order:-1}
-  /* grid/battery label below */
   .ha-e-node.grid .ha-e-label,.ha-e-node.battery .ha-e-label{order:1}
-  /* home label below */
   .ha-e-node.home{align-items:center}
   .ha-e-node.home .ha-e-label{order:1}
-  /* flow lines SVG */
   .ha-e-lines{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0;overflow:visible}
   .ha-e-path{fill:none;stroke-width:1;vector-effect:non-scaling-stroke}
   .p-solar{stroke:#ff9800}.p-return{stroke:#488fc2}.p-grid{stroke:#488fc2}
   .p-bat-home{stroke:#4db6ac}.p-bat-grid{stroke:#4db6ac}
   .d-solar{fill:#ff9800}.d-return{fill:#488fc2}.d-grid{fill:#488fc2}
   .d-bat-home{fill:#4db6ac}.d-bat-grid{fill:#4db6ac}
-  /* Energy — EPEX */
   .epex-pills{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;margin-bottom:.75rem}
   .pill{background:var(--bg);border:1px solid var(--border);border-radius:.5rem;padding:.4rem .6rem;text-align:center}
   .pill-label{font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
@@ -602,9 +532,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <nav>
   <div style="display:flex;gap:.5rem">
     <button class="nav-btn active" onclick="showPage('dashboard',this)">Dashboard</button>
-    <button class="nav-btn" onclick="showPage('energy',this)">Energy ⚡</button>
+    <button class="nav-btn" onclick="showPage('energy',this)">Energy &#9889;</button>
   </div>
-  <button class="nav-btn nav-settings" id="btn-settings" onclick="showPage('settings',this)" title="Settings">✎</button>
+  <button class="nav-btn nav-settings" id="btn-settings" onclick="showPage('settings',this)" title="Settings">&#x270E;</button>
 </nav>
 
 <!-- DASHBOARD PAGE -->
@@ -623,13 +553,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="card"><div class="card-label">Grid</div><div class="card-value" id="grid">--</div><div class="card-sub">W (+ import)</div></div>
     <div class="card"><div class="card-label">Solar surplus</div><div class="card-value" id="surplus">--</div><div class="card-sub">W available</div></div>
     <div class="card"><div class="card-label">Battery SOC</div><div class="card-value" id="batSoc">--</div><div class="card-sub">%</div></div>
-    <div class="card"><div class="card-label">EV SOC</div><div class="card-value" id="evSoc">--</div><div class="card-sub">%</div></div>
-    <div class="card"><div class="card-label">Buy price</div><div class="card-value" id="tariff">--</div><div class="card-sub" id="tariff-sell-sub">€/kWh</div></div>
+    <div id="ev-soc-cards" style="display:contents"></div>
+    <div class="card"><div class="card-label">Buy price</div><div class="card-value" id="tariff">--</div><div class="card-sub" id="tariff-sell-sub">&#8364;/kWh</div></div>
   </div>
   <div class="section-title">Decisions</div>
   <div class="grid">
     <div class="card"><div class="card-label">Battery</div><div id="batDecision"><span class="badge badge-gray">--</span></div></div>
-    <div class="card"><div class="card-label">EV Charger</div><div id="evDecision"><span class="badge badge-gray">--</span></div></div>
+    <div id="ev-decision-cards" style="display:contents"></div>
   </div>
   <div class="reason-card"><div class="card-label">Last decision reason</div><p id="reason">--</p></div>
   <div class="updated" id="updated"></div>
@@ -640,36 +570,36 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="settings-grid">
 
     <div class="settings-group">
-      <div class="sg-head"><h3>Power sensors</h3><button class="pencil-btn" onclick="toggleEdit('sg-power')" title="Edit">✎</button></div>
+      <div class="sg-head"><h3>Power sensors</h3><button class="pencil-btn" onclick="toggleEdit('sg-power')" title="Edit">&#x270E;</button></div>
       <div id="sg-power-view">
-        <div class="sg-row"><span class="sg-key">Solar</span><span id="v_solar_power_sensor" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">Grid</span><span id="v_grid_power_sensor" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">House</span><span id="v_house_power_sensor" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">Battery power</span><span id="v_battery_power_sensor" class="sg-val">—</span></div>
+        <div class="sg-row"><span class="sg-key">Solar</span><span id="v_solar_power_sensor" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Grid</span><span id="v_grid_power_sensor" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">House</span><span id="v_house_power_sensor" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Battery power</span><span id="v_battery_power_sensor" class="sg-val">&#8212;</span></div>
       </div>
       <div id="sg-power-edit" class="sg-edit" style="display:none">
-        <div class="field"><label>Solar production (W)</label><div class="combo"><input class="combo-input" id="s_solar_power_sensor" placeholder="Search W sensor…" autocomplete="off"><ul class="combo-list" id="sl_solar_power_sensor"></ul></div></div>
-        <div class="field"><label>Grid power (W, + = import)</label><div class="combo"><input class="combo-input" id="s_grid_power_sensor" placeholder="Search W sensor…" autocomplete="off"><ul class="combo-list" id="sl_grid_power_sensor"></ul></div></div>
-        <div class="field"><label>House consumption (W, optional)</label><div class="combo"><input class="combo-input" id="s_house_power_sensor" placeholder="Search W sensor…" autocomplete="off"><ul class="combo-list" id="sl_house_power_sensor"></ul></div></div>
-        <div class="field"><label>Battery power (W, + charge / − discharge)</label><div class="combo"><input class="combo-input" id="s_battery_power_sensor" placeholder="Search W sensor…" autocomplete="off"><ul class="combo-list" id="sl_battery_power_sensor"></ul></div></div>
+        <div class="field"><label>Solar production (W)</label><div class="combo"><input class="combo-input" id="s_solar_power_sensor" placeholder="Search W sensor..." autocomplete="off"><ul class="combo-list" id="sl_solar_power_sensor"></ul></div></div>
+        <div class="field"><label>Grid power (W, + = import)</label><div class="combo"><input class="combo-input" id="s_grid_power_sensor" placeholder="Search W sensor..." autocomplete="off"><ul class="combo-list" id="sl_grid_power_sensor"></ul></div></div>
+        <div class="field"><label>House consumption (W, optional)</label><div class="combo"><input class="combo-input" id="s_house_power_sensor" placeholder="Search W sensor..." autocomplete="off"><ul class="combo-list" id="sl_house_power_sensor"></ul></div></div>
+        <div class="field"><label>Battery power (W, + charge / - discharge)</label><div class="combo"><input class="combo-input" id="s_battery_power_sensor" placeholder="Search W sensor..." autocomplete="off"><ul class="combo-list" id="sl_battery_power_sensor"></ul></div></div>
         <button class="save-btn" onclick="saveGroup(['solar_power_sensor','grid_power_sensor','house_power_sensor','battery_power_sensor'],'sg-power')">Save</button>
       </div>
     </div>
 
     <div class="settings-group">
-      <div class="sg-head"><h3>Battery</h3><button class="pencil-btn" onclick="toggleEdit('sg-bat')" title="Edit">✎</button></div>
+      <div class="sg-head"><h3>Battery</h3><button class="pencil-btn" onclick="toggleEdit('sg-bat')" title="Edit">&#x270E;</button></div>
       <div id="sg-bat-view">
-        <div class="sg-row"><span class="sg-key">SOC sensor</span><span id="v_battery_soc_sensor" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">Charge switch</span><span id="v_battery_charge_switch" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">Discharge switch</span><span id="v_battery_discharge_switch" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">Max charge / discharge</span><span id="v_battery_max_charge_w" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">SOC range</span><span id="v_battery_soc_range" class="sg-val">—</span></div>
+        <div class="sg-row"><span class="sg-key">SOC sensor</span><span id="v_battery_soc_sensor" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Charge switch</span><span id="v_battery_charge_switch" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Discharge switch</span><span id="v_battery_discharge_switch" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Max charge / discharge</span><span id="v_battery_max_charge_w" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">SOC range</span><span id="v_battery_soc_range" class="sg-val">&#8212;</span></div>
       </div>
       <div id="sg-bat-edit" class="sg-edit" style="display:none">
-        <div class="field"><label>Battery SOC (%)</label><div class="combo"><input class="combo-input" id="s_battery_soc_sensor" placeholder="Search % sensor…" autocomplete="off"><ul class="combo-list" id="sl_battery_soc_sensor"></ul></div></div>
-        <div class="field"><label>Charge switch</label><div class="combo"><input class="combo-input" id="s_battery_charge_switch" placeholder="Search switch…" autocomplete="off"><ul class="combo-list" id="sl_battery_charge_switch"></ul></div></div>
-        <div class="field"><label>Discharge switch</label><div class="combo"><input class="combo-input" id="s_battery_discharge_switch" placeholder="Search switch…" autocomplete="off"><ul class="combo-list" id="sl_battery_discharge_switch"></ul></div></div>
-        <div class="field"><label>Standby switch (optional)</label><div class="combo"><input class="combo-input" id="s_battery_standby_switch" placeholder="Search switch…" autocomplete="off"><ul class="combo-list" id="sl_battery_standby_switch"></ul></div></div>
+        <div class="field"><label>Battery SOC (%)</label><div class="combo"><input class="combo-input" id="s_battery_soc_sensor" placeholder="Search % sensor..." autocomplete="off"><ul class="combo-list" id="sl_battery_soc_sensor"></ul></div></div>
+        <div class="field"><label>Charge switch</label><div class="combo"><input class="combo-input" id="s_battery_charge_switch" placeholder="Search switch..." autocomplete="off"><ul class="combo-list" id="sl_battery_charge_switch"></ul></div></div>
+        <div class="field"><label>Discharge switch</label><div class="combo"><input class="combo-input" id="s_battery_discharge_switch" placeholder="Search switch..." autocomplete="off"><ul class="combo-list" id="sl_battery_discharge_switch"></ul></div></div>
+        <div class="field"><label>Standby switch (optional)</label><div class="combo"><input class="combo-input" id="s_battery_standby_switch" placeholder="Search switch..." autocomplete="off"><ul class="combo-list" id="sl_battery_standby_switch"></ul></div></div>
         <div class="field"><label>Max charge (W)</label><input type="number" id="s_battery_max_charge_w" min="100" max="20000"></div>
         <div class="field"><label>Max discharge (W)</label><input type="number" id="s_battery_max_discharge_w" min="100" max="20000"></div>
         <div class="field"><label>Min SOC (%)</label><input type="number" id="s_battery_min_soc" min="0" max="50"></div>
@@ -679,46 +609,44 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
 
     <div class="settings-group">
-      <div class="sg-head"><h3>EV Charger</h3><button class="pencil-btn" onclick="toggleEdit('sg-ev')" title="Edit">✎</button></div>
+      <div class="sg-head"><h3>EV Fleet</h3><button class="pencil-btn" onclick="toggleEdit('sg-ev')" title="Edit">&#x270E;</button></div>
       <div id="sg-ev-view">
-        <div class="sg-row"><span class="sg-key">Charger switch</span><span id="v_ev_charger_switch" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">SOC sensor</span><span id="v_ev_soc_sensor" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">Target SOC</span><span id="v_ev_target_soc" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">Departure</span><span id="v_ev_departure_time" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">Max charge</span><span id="v_ev_max_charge_w" class="sg-val">—</span></div>
+        <div id="ev-fleet-view"></div>
+        <div class="sg-row" id="ev-fleet-empty" style="display:none">
+          <span class="sg-key" style="color:var(--muted);font-style:italic">No vehicles configured</span>
+        </div>
       </div>
       <div id="sg-ev-edit" class="sg-edit" style="display:none">
-        <div class="field"><label>Charger switch</label><div class="combo"><input class="combo-input" id="s_ev_charger_switch" placeholder="Search switch…" autocomplete="off"><ul class="combo-list" id="sl_ev_charger_switch"></ul></div></div>
-        <div class="field"><label>EV SOC sensor (%)</label><div class="combo"><input class="combo-input" id="s_ev_soc_sensor" placeholder="Search % sensor…" autocomplete="off"><ul class="combo-list" id="sl_ev_soc_sensor"></ul></div></div>
-        <div class="field"><label>Target SOC (%)</label><input type="number" id="s_ev_target_soc" min="20" max="100"></div>
-        <div class="field"><label>Departure (HH:MM)</label><input type="time" id="s_ev_departure_time"></div>
-        <div class="field"><label>Max charge (W)</label><input type="number" id="s_ev_max_charge_w" min="1000" max="22000"></div>
-        <button class="save-btn" onclick="saveGroup(['ev_charger_switch','ev_soc_sensor','ev_target_soc','ev_departure_time','ev_max_charge_w'],'sg-ev')">Save</button>
+        <div id="ev-fleet-edit"></div>
+        <div style="display:flex;gap:.5rem;margin-top:.5rem">
+          <button class="save-btn" style="background:var(--border);color:var(--text)" onclick="addEv()">+ Add vehicle</button>
+          <button class="save-btn" onclick="saveEvFleet()">Save fleet</button>
+        </div>
       </div>
     </div>
 
     <div class="settings-group">
-      <div class="sg-head"><h3>Tariff &amp; optimizer</h3><button class="pencil-btn" onclick="toggleEdit('sg-tariff')" title="Edit">✎</button></div>
+      <div class="sg-head"><h3>Tariff &amp; optimizer</h3><button class="pencil-btn" onclick="toggleEdit('sg-tariff')" title="Edit">&#x270E;</button></div>
       <div id="sg-tariff-view">
-        <div class="sg-row"><span class="sg-key">Price sensor</span><span id="v_tariff_sensor" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">Cheap &lt;</span><span id="v_cheap_threshold" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">Expensive &gt;</span><span id="v_expensive_threshold" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">Update interval</span><span id="v_update_interval" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">Conso a (×EPEX)</span><span id="v_tariff_a_consumption" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">Conso b (€/kWh)</span><span id="v_tariff_b_consumption" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">Inject a (×EPEX)</span><span id="v_tariff_a_injection" class="sg-val">—</span></div>
-        <div class="sg-row"><span class="sg-key">Inject b (€/kWh)</span><span id="v_tariff_b_injection" class="sg-val">—</span></div>
+        <div class="sg-row"><span class="sg-key">Price sensor</span><span id="v_tariff_sensor" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Cheap &lt;</span><span id="v_cheap_threshold" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Expensive &gt;</span><span id="v_expensive_threshold" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Update interval</span><span id="v_update_interval" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Conso a (&#xD7;EPEX)</span><span id="v_tariff_a_consumption" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Conso b (&#8364;/kWh)</span><span id="v_tariff_b_consumption" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Inject a (&#xD7;EPEX)</span><span id="v_tariff_a_injection" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Inject b (&#8364;/kWh)</span><span id="v_tariff_b_injection" class="sg-val">&#8212;</span></div>
       </div>
       <div id="sg-tariff-edit" class="sg-edit" style="display:none">
-        <div class="field"><label>Price sensor (EUR/kWh, optional)</label><div class="combo"><input class="combo-input" id="s_tariff_sensor" placeholder="Search price sensor…" autocomplete="off"><ul class="combo-list" id="sl_tariff_sensor"></ul></div></div>
-        <div class="field"><label>Cheap threshold — prix effectif conso (€/kWh)</label><input type="number" id="s_cheap_threshold" step="0.01" min="0" max="1"></div>
-        <div class="field"><label>Expensive threshold — prix effectif conso (€/kWh)</label><input type="number" id="s_expensive_threshold" step="0.01" min="0" max="1"></div>
+        <div class="field"><label>Price sensor (EUR/kWh, optional)</label><div class="combo"><input class="combo-input" id="s_tariff_sensor" placeholder="Search price sensor..." autocomplete="off"><ul class="combo-list" id="sl_tariff_sensor"></ul></div></div>
+        <div class="field"><label>Cheap threshold (&#8364;/kWh)</label><input type="number" id="s_cheap_threshold" step="0.01" min="0" max="1"></div>
+        <div class="field"><label>Expensive threshold (&#8364;/kWh)</label><input type="number" id="s_expensive_threshold" step="0.01" min="0" max="1"></div>
         <div class="field"><label>Update interval (s)</label><input type="number" id="s_update_interval" min="10" max="3600"></div>
-        <div style="margin:.5rem 0 .25rem;font-size:.8rem;color:var(--muted)">Prix effectif = a × EPEX + b</div>
-        <div class="field"><label>Consommation — a (multiplicateur EPEX)</label><input type="number" id="s_tariff_a_consumption" step="0.001" min="0" max="10"></div>
-        <div class="field"><label>Consommation — b (fixe, €/kWh)</label><input type="number" id="s_tariff_b_consumption" step="0.001" min="-1" max="1"></div>
-        <div class="field"><label>Injection — a (multiplicateur EPEX)</label><input type="number" id="s_tariff_a_injection" step="0.001" min="0" max="10"></div>
-        <div class="field"><label>Injection — b (fixe, €/kWh)</label><input type="number" id="s_tariff_b_injection" step="0.001" min="-1" max="1"></div>
+        <div style="margin:.5rem 0 .25rem;font-size:.8rem;color:var(--muted)">Prix effectif = a x EPEX + b</div>
+        <div class="field"><label>Consommation a (multiplicateur EPEX)</label><input type="number" id="s_tariff_a_consumption" step="0.001" min="0" max="10"></div>
+        <div class="field"><label>Consommation b (fixe, &#8364;/kWh)</label><input type="number" id="s_tariff_b_consumption" step="0.001" min="-1" max="1"></div>
+        <div class="field"><label>Injection a (multiplicateur EPEX)</label><input type="number" id="s_tariff_a_injection" step="0.001" min="0" max="10"></div>
+        <div class="field"><label>Injection b (fixe, &#8364;/kWh)</label><input type="number" id="s_tariff_b_injection" step="0.001" min="-1" max="1"></div>
         <button class="save-btn" onclick="saveGroup(['tariff_sensor','cheap_threshold','expensive_threshold','update_interval','tariff_a_consumption','tariff_b_consumption','tariff_a_injection','tariff_b_injection'],'sg-tariff')">Save</button>
       </div>
     </div>
@@ -728,15 +656,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 <!-- ENERGY PAGE -->
 <div id="page-energy" class="page">
-
-  <!-- HA-style Energy Distribution + Power chart side by side -->
   <div class="card" style="margin-bottom:.75rem;padding:1rem">
     <div style="display:grid;grid-template-columns:420px 1fr;gap:2rem;align-items:center">
       <div>
         <div class="card-label" style="margin-bottom:.5rem;text-align:center">Live flow</div>
         <div class="ha-e-wrap">
-
-      <!-- Solar -->
       <div class="ha-e-node solar">
         <span class="ha-e-label">Solar</span>
         <div class="ha-e-circle c-solar">
@@ -744,8 +668,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <span class="ha-e-val" id="ev-solar">-- W</span>
         </div>
       </div>
-
-      <!-- Grid -->
       <div class="ha-e-node grid">
         <div class="ha-e-circle c-grid">
           <svg viewBox="0 0 24 24" width="22" height="22"><path fill="#488fc2" d="M8.28,5.45L6.5,4.55L7.76,2H16.23L17.5,4.55L15.72,5.44L15,4H9L8.28,5.45M18.62,8H14.09L13.3,5H10.7L9.91,8H5.38L4.1,10.55L5.89,11.44L6.62,10H17.38L18.1,11.45L19.89,10.56L18.62,8M17.77,22H15.7L15.46,21.1L12,15.9L8.53,21.1L8.3,22H6.23L9.12,11H11.19L10.83,12.35L12,14.1L13.16,12.35L12.81,11H14.88L17.77,22M11.4,15L10.5,13.65L9.32,18.13L11.4,15M14.68,18.12L13.5,13.64L12.6,15L14.68,18.12Z"/></svg>
@@ -754,8 +676,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <span class="ha-e-label">Grid</span>
       </div>
-
-      <!-- Home -->
       <div class="ha-e-node home">
         <div class="ha-e-circle c-home">
           <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z"/></svg>
@@ -763,8 +683,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <span class="ha-e-label">Home</span>
       </div>
-
-      <!-- Battery -->
       <div class="ha-e-node battery">
         <div class="ha-e-circle c-battery">
           <svg viewBox="0 0 24 24" width="20" height="20"><path fill="#4db6ac" d="M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.67C6,21.4 6.6,22 7.33,22H16.67A1.33,1.33 0 0,0 18,20.67V5.33C18,4.6 17.4,4 16.67,4Z"/></svg>
@@ -773,39 +691,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <span class="ha-e-label">Battery</span>
       </div>
-
-      <!-- SVG flow lines (viewBox matches 500x290 container, preserveAspectRatio=none) -->
       <svg class="ha-e-lines" viewBox="0 0 100 100" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-        <!-- Solar (50%,10%) → Home (90%,50%) -->
         <path id="epl-solar"    class="ha-e-path p-solar"    d="M50,10 C50,35 90,35 90,50"/>
-        <!-- Solar (50%,10%) → Grid (10%,50%) export -->
         <path id="epl-return"   class="ha-e-path p-return"   d="M50,10 C50,35 10,35 10,50"/>
-        <!-- Grid (10%,50%) → Home (90%,50%) import -->
         <path id="epl-grid"     class="ha-e-path p-grid"     d="M10,50 H90"/>
-        <!-- Battery (50%,90%) → Home (90%,50%) -->
         <path id="epl-bat-home" class="ha-e-path p-bat-home" d="M50,90 C50,65 90,65 90,50"/>
-        <!-- Battery (50%,90%) → Grid (10%,50%) -->
         <path id="epl-bat-grid" class="ha-e-path p-bat-grid" d="M50,90 C50,65 10,65 10,50"/>
-
-        <!-- Animated dots – hidden until JS turns them on -->
         <circle r="1.2" class="d-solar"    id="edot-solar"    style="display:none"><animateMotion dur="2.8s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-solar"/></animateMotion></circle>
         <circle r="1.2" class="d-return"   id="edot-return"   style="display:none"><animateMotion dur="3.2s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-return"/></animateMotion></circle>
         <circle r="1.2" class="d-grid"     id="edot-grid"     style="display:none"><animateMotion dur="4s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-grid"/></animateMotion></circle>
         <circle r="1.2" class="d-bat-home" id="edot-bat-home" style="display:none"><animateMotion dur="3.5s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-home"/></animateMotion></circle>
         <circle r="1.2" class="d-bat-grid" id="edot-bat-grid" style="display:none"><animateMotion dur="4s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-grid"/></animateMotion></circle>
       </svg>
-        </div><!-- end ha-e-wrap -->
-      </div><!-- end flow column -->
+        </div>
+      </div>
       <div style="min-width:0">
         <div class="card-label" style="margin-bottom:.5rem">Power sources</div>
         <div style="position:relative;height:400px">
           <canvas id="power-chart"></canvas>
         </div>
-      </div><!-- end chart column -->
-    </div><!-- end grid -->
+      </div>
+    </div>
   </div>
 
-  <!-- EPEX prices -->
   <div class="section-title">EPEX SPOT prices</div>
   <div class="energy-layout">
     <div>
@@ -825,15 +733,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <div class="chart-wrap"><canvas id="epexChart"></canvas></div>
         <div class="no-epex" id="no-epex" style="display:none">
-          No EPEX data — add your ENTSO-E token<br>in <strong>Add-on → Configuration</strong>.<br><br>
-          <a href="https://transparency.entsoe.eu/usrm/user/createPublicUser" target="_blank" rel="noopener">→ Get a free ENTSO-E token</a>
+          No EPEX data &mdash; add your ENTSO-E token<br>in <strong>Add-on &rarr; Configuration</strong>.<br><br>
+          <a href="https://transparency.entsoe.eu/usrm/user/createPublicUser" target="_blank" rel="noopener">&rarr; Get a free ENTSO-E token</a>
         </div>
         <div class="updated" id="ep-zone"></div>
       </div>
     </div>
     <div>
       <div class="card" style="max-height:340px;overflow:hidden">
-        <div class="card-label" id="sched-title" style="margin-bottom:.4rem">Schedule — Today</div>
+        <div class="card-label" id="sched-title" style="margin-bottom:.4rem">Schedule &mdash; Today</div>
         <div style="max-height:290px;overflow-y:auto">
           <table class="price-table">
             <thead><tr><th>Time</th><th>ct/kWh</th><th></th></tr></thead>
@@ -850,7 +758,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <script>
 const BASE = window.location.pathname.replace(/\/+$/, "");
 
-// ── Inherit HA theme from parent ingress frame ─────────────────────────────
 (function(){
   try {
     const ps = window.parent.getComputedStyle(window.parent.document.documentElement);
@@ -862,7 +769,7 @@ const BASE = window.location.pathname.replace(/\/+$/, "");
       const v = ps.getPropertyValue(h).trim();
       if (v) root.style.setProperty(l, v);
     }
-  } catch(e) { /* standalone or cross-origin — use prefers-color-scheme fallback */ }
+  } catch(e) {}
 })();
 
 let _epexData = null, _epexChartInst = null, _epexDay = 'today';
@@ -884,7 +791,7 @@ function showToast() {
 
 function badge(val, map) {
   const cfg = map[val] || {cls:"gray", label: val||"--"};
-  return `<span class="badge badge-${cfg.cls}">${cfg.label}</span>`;
+  return '<span class="badge badge-'+cfg.cls+'">'+cfg.label+'</span>';
 }
 const BAT_MAP = {charge:{cls:"green",label:"Charging"},discharge:{cls:"yellow",label:"Discharging"},standby:{cls:"blue",label:"Standby"},idle:{cls:"gray",label:"Idle"}};
 const EV_MAP  = {charge:{cls:"green",label:"Charging"},pause:{cls:"gray",label:"Paused"}};
@@ -896,12 +803,11 @@ async function refresh() {
     document.getElementById("grid").textContent    = d.grid_w ?? "--";
     document.getElementById("surplus").textContent = d.solar_surplus_w ?? "--";
     document.getElementById("batSoc").textContent  = d.battery_soc!=null ? d.battery_soc+"%" : "--";
-    document.getElementById("evSoc").textContent   = d.ev_soc!=null ? d.ev_soc+"%" : "--";
     document.getElementById("tariff").textContent = d.tariff!=null ? d.tariff.toFixed(3) : "--";
     const sellSub = document.getElementById("tariff-sell-sub");
-    if (sellSub) sellSub.textContent = d.tariff_injection!=null ? `€/kWh buy · sell ${d.tariff_injection.toFixed(3)}` : '€/kWh';
+    if (sellSub) sellSub.textContent = d.tariff_injection!=null ? "€/kWh buy · sell "+d.tariff_injection.toFixed(3) : "€/kWh";
     document.getElementById("batDecision").innerHTML = badge(d.battery, BAT_MAP);
-    document.getElementById("evDecision").innerHTML  = badge(d.ev, EV_MAP);
+    renderEvCards(d.evs || []);
     document.getElementById("reason").textContent  = d.reason || "--";
     document.getElementById("updated").textContent = "Updated: "+(d.updated_at||"--");
     document.querySelectorAll(".mode-btn").forEach(b => b.classList.toggle("active", b.dataset.mode===d.mode));
@@ -911,16 +817,14 @@ async function refresh() {
 
 function updateFlow(d) {
   const set  = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
-  // Use 'inline' explicitly for SVG — empty string may not override display:none in all browsers
   const show = (id,on) => { const el=document.getElementById(id); if(el) el.style.display = on ? 'inline' : 'none'; };
 
   const solar   = d.solar_w ?? 0;
-  const grid    = d.grid_w  ?? 0;  // + = importing from grid, - = exporting to grid
+  const grid    = d.grid_w  ?? 0;
   const batSoc  = d.battery_soc;
   const batDec  = d.battery || 'idle';
-  const batW    = d.battery_w;     // W: + = charging, - = discharging (actual measurement)
+  const batW    = d.battery_w;
 
-  // Prefer actual battery_w measurement; fall back to optimizer decision
   const batDischarging = batW != null ? batW < -50 : batDec === 'discharge';
   const batCharging    = batW != null ? batW >  50  : batDec === 'charge';
 
@@ -935,12 +839,11 @@ function updateFlow(d) {
   set('ev-bat',      batSoc!=null ? batSoc+'%' : '--');
   set('ev-bat-dec',  batW!=null ? (batW>50?'↑ '+batW+' W':batW<-50?'↓ '+Math.abs(batW)+' W':'idle') : batDec);
 
-  // Animated dot visibility — based on actual measurements
-  show('edot-solar',    solar > 50);                            // solar → home
-  show('edot-return',   grid < -50);                            // export to grid (solar or bat surplus)
-  show('edot-grid',     grid >  50);                            // import from grid → home
-  show('edot-bat-home', batDischarging);                        // battery → home
-  show('edot-bat-grid', batDischarging && grid < -50);          // battery contributing to export
+  show('edot-solar',    solar > 50);
+  show('edot-return',   grid < -50);
+  show('edot-grid',     grid >  50);
+  show('edot-bat-home', batDischarging);
+  show('edot-bat-grid', batDischarging && grid < -50);
 }
 
 document.querySelectorAll(".mode-btn").forEach(btn => {
@@ -950,32 +853,28 @@ document.querySelectorAll(".mode-btn").forEach(btn => {
   });
 });
 
-// ── Settings ─────────────────────────────────────────────────────────────────
-
-// Unit filter map: which units to prefer for each field
+// Settings
 const FIELD_UNITS = {
   solar_power_sensor:        ['W','kW','watt','watts'],
   grid_power_sensor:         ['W','kW','watt','watts'],
   house_power_sensor:        ['W','kW','watt','watts'],
   battery_power_sensor:      ['W','kW','watt','watts'],
   battery_soc_sensor:        ['%'],
-  ev_soc_sensor:             ['%'],
   tariff_sensor:             ['EUR/kWh','€/kWh','$/kWh','USD/kWh','ct/kWh'],
 };
-const SWITCH_FIELDS = ['battery_charge_switch','battery_discharge_switch','battery_standby_switch','ev_charger_switch'];
+const SWITCH_FIELDS = ['battery_charge_switch','battery_discharge_switch','battery_standby_switch'];
 const COMBO_FIELDS  = [...Object.keys(FIELD_UNITS), ...SWITCH_FIELDS];
 
 function shorten(val) { return val ? (val.split('.').slice(1).join('.')||val) : '—'; }
 
-// Combobox engine
-function setupCombo(fieldKey, allEntities, currentVal) {
+function setupCombo(fieldKey, allEntities, currentVal, isSwitch, wantedUnits) {
   const input = document.getElementById('s_'+fieldKey);
   const list  = document.getElementById('sl_'+fieldKey);
   if (!input || !list) return;
 
-  // Build filtered pool
-  const isSwitch   = SWITCH_FIELDS.includes(fieldKey);
-  const wantedUnits = FIELD_UNITS[fieldKey] || [];
+  if (isSwitch === undefined || isSwitch === null) isSwitch = SWITCH_FIELDS.includes(fieldKey);
+  if (!wantedUnits) wantedUnits = FIELD_UNITS[fieldKey] || [];
+
   let pool;
   if (isSwitch) {
     pool = allEntities.filter(e => e.entity_id.startsWith('switch.')||e.entity_id.startsWith('input_boolean.'));
@@ -989,7 +888,6 @@ function setupCombo(fieldKey, allEntities, currentVal) {
     pool = allEntities.filter(e => e.entity_id.startsWith('sensor.'));
   }
 
-  // Set initial display
   input.dataset.value = currentVal || '';
   const findName = id => { const e = allEntities.find(x=>x.entity_id===id); return e ? (e.friendly_name||e.entity_id) : id; };
   input.value = currentVal ? findName(currentVal) : '';
@@ -1002,41 +900,25 @@ function setupCombo(fieldKey, allEntities, currentVal) {
       (e.friendly_name||'').toLowerCase().includes(lq)
     ).slice(0, 50);
     list.innerHTML =
-      `<li data-id="" class="cl-none">— none —</li>` +
+      '<li data-id="" class="cl-none">— none —</li>' +
       matches.map(e => {
         const name = (e.friendly_name && e.friendly_name !== e.entity_id) ? e.friendly_name : e.entity_id;
-        const unit = e.unit ? `<span class="cl-unit">${e.unit}</span>` : '';
-        return `<li data-id="${e.entity_id}" title="${e.entity_id}"><span class="cl-name">${name}</span>${unit}</li>`;
+        const unit = e.unit ? '<span class="cl-unit">'+e.unit+'</span>' : '';
+        return '<li data-id="'+e.entity_id+'" title="'+e.entity_id+'"><span class="cl-name">'+name+'</span>'+unit+'</li>';
       }).join('');
-    list.style.display = 'block';   // ← was '' which kept CSS display:none
+    list.style.display = 'block';
   }
 
-  // On focus: clear text so user can type freely, show full list
-  input.addEventListener('focus', () => {
-    input.value = '';
-    renderList('');
-  });
-
-  input.addEventListener('input', () => {
-    input.dataset.value = '';
-    renderList(input.value);
-  });
-
-  input.addEventListener('keydown', ev => {
-    if (ev.key === 'Escape') { list.style.display = 'none'; input.blur(); }
-  });
-
-  // On blur: hide list, restore display name if selection was made
+  input.addEventListener('focus', () => { input.value = ''; renderList(''); });
+  input.addEventListener('input', () => { input.dataset.value = ''; renderList(input.value); });
+  input.addEventListener('keydown', ev => { if (ev.key === 'Escape') { list.style.display = 'none'; input.blur(); } });
   input.addEventListener('blur', () => {
     setTimeout(() => { list.style.display = 'none'; }, 200);
-    // Restore friendly name of the currently selected value
     const sel = input.dataset.value;
     input.value = sel ? findName(sel) : '';
   });
-
-  // mousedown fires before blur — capture selection first
   list.addEventListener('mousedown', ev => {
-    ev.preventDefault();   // prevent blur from firing before we read the click
+    ev.preventDefault();
     const li = ev.target.closest('li'); if (!li) return;
     input.dataset.value = li.dataset.id;
     currentVal          = li.dataset.id;
@@ -1059,31 +941,32 @@ async function loadSettings() {
   ]);
   _allEntities = entitiesRes.entities || [];
 
-  // Setup combo fields
-  for (const key of COMBO_FIELDS) {
+  const COMBO_FIELDS_NO_EV = COMBO_FIELDS.slice();
+  for (const key of COMBO_FIELDS_NO_EV) {
     setupCombo(key, _allEntities, settingsRes[key] || '');
     const v = document.getElementById("v_"+key);
     if (v) v.textContent = shorten(settingsRes[key]);
   }
 
-  // Numeric / time inputs
   const numFmt = {
     battery_max_charge_w:   v=>v+' W',      battery_max_discharge_w: v=>v+' W',
     battery_min_soc:        v=>v+'%',       battery_max_soc:         v=>v+'%',
-    ev_target_soc:          v=>v+'%',       ev_max_charge_w:         v=>v+' W',
-    cheap_threshold:        v=>v+' €/kWh', expensive_threshold:     v=>v+' €/kWh',
-    update_interval:        v=>v+'s',       ev_departure_time:       v=>v,
-    tariff_a_consumption:   v=>'×'+v,       tariff_b_consumption:    v=>(v>=0?'+':'')+v+' €/kWh',
-    tariff_a_injection:     v=>'×'+v,       tariff_b_injection:      v=>(v>=0?'+':'')+v+' €/kWh',
+    cheap_threshold:        v=>v+' €/kWh', expensive_threshold: v=>v+' €/kWh',
+    update_interval:        v=>v+'s',
+    tariff_a_consumption:   v=>'×'+v,  tariff_b_consumption:    v=>(v>=0?'+':'')+v+' €/kWh',
+    tariff_a_injection:     v=>'×'+v,  tariff_b_injection:      v=>(v>=0?'+':'')+v+' €/kWh',
   };
   for (const [key,fmt] of Object.entries(numFmt)) {
     const el = document.getElementById("s_"+key); if (el&&settingsRes[key]!=null) el.value = settingsRes[key];
     const v  = document.getElementById("v_"+key); if (v&&settingsRes[key]!=null)  v.textContent = fmt(settingsRes[key]);
   }
   const socRange  = document.getElementById("v_battery_soc_range");
-  if (socRange)  socRange.textContent  = `${settingsRes.battery_min_soc??'?'}% – ${settingsRes.battery_max_soc??'?'}%`;
+  if (socRange)  socRange.textContent  = (settingsRes.battery_min_soc??'?')+'% – '+(settingsRes.battery_max_soc??'?')+'%';
   const maxCharge = document.getElementById("v_battery_max_charge_w");
-  if (maxCharge) maxCharge.textContent = `${settingsRes.battery_max_charge_w??'?'} W / ${settingsRes.battery_max_discharge_w??'?'} W`;
+  if (maxCharge) maxCharge.textContent = (settingsRes.battery_max_charge_w??'?')+' W / '+(settingsRes.battery_max_discharge_w??'?')+' W';
+
+  _currentEvs = settingsRes.evs || [];
+  renderEvFleet(_currentEvs);
 }
 
 function toggleEdit(id) {
@@ -1097,12 +980,12 @@ function toggleEdit(id) {
 
 async function saveGroup(keys, groupId) {
   const body = {};
-  const intKeys   = ['battery_max_charge_w','battery_max_discharge_w','battery_min_soc','battery_max_soc','ev_target_soc','ev_max_charge_w','update_interval'];
+  const intKeys   = ['battery_max_charge_w','battery_max_discharge_w','battery_min_soc','battery_max_soc','update_interval'];
   const floatKeys = ['cheap_threshold','expensive_threshold','tariff_a_consumption','tariff_b_consumption','tariff_a_injection','tariff_b_injection'];
   for (const key of keys) {
     let val;
     if (COMBO_FIELDS.includes(key)) {
-      val = getComboValue(key);   // combo — read dataset.value
+      val = getComboValue(key);
     } else {
       const el = document.getElementById('s_'+key); if (!el) continue;
       val = el.value;
@@ -1116,11 +999,105 @@ async function saveGroup(keys, groupId) {
   showToast();
 }
 
+// EV Fleet
+let _currentEvs = [];
+let _evCounter = 0;
+
+function renderEvFleet(evs) {
+  const viewEl  = document.getElementById('ev-fleet-view');
+  const emptyEl = document.getElementById('ev-fleet-empty');
+  if (!viewEl) return;
+  if (!evs.length) {
+    viewEl.innerHTML = '';
+    if (emptyEl) emptyEl.style.display = '';
+  } else {
+    if (emptyEl) emptyEl.style.display = 'none';
+    viewEl.innerHTML = evs.map((ev,i) =>
+      '<div class="sg-row"><span class="sg-key">🚗 '+(ev.name||'EV '+(i+1))+'</span><span class="sg-val">'+(shorten(ev.charger_switch)||'—')+'</span></div>'
+    ).join('');
+  }
+  _evCounter = evs.length;
+  const editEl = document.getElementById('ev-fleet-edit');
+  if (!editEl) return;
+  editEl.innerHTML = evs.map((ev,i) => _evEntryHtml(i, ev)).join('');
+  evs.forEach((ev,i) => _setupEvCombos(i, ev));
+}
+
+function _evEntryHtml(i, ev) {
+  ev = ev || {};
+  return '<div class="ev-entry" id="ev-entry-'+i+'" data-idx="'+i+'" style="border:1px solid var(--border);border-radius:.5rem;padding:.6rem;margin-bottom:.5rem">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem">'
+    +'<strong style="font-size:.8rem">Vehicle '+(i+1)+'</strong>'
+    +'<button class="pencil-btn" onclick="removeEv('+i+')" title="Remove">✕</button>'
+    +'</div>'
+    +'<div class="field"><label>Name</label><input type="text" id="ev_name_'+i+'" value="'+(ev.name||'')+'"></div>'
+    +'<div class="field"><label>Charger switch</label><div class="combo"><input class="combo-input" id="s_ev_charger_'+i+'" placeholder="Search switch..." autocomplete="off"><ul class="combo-list" id="sl_ev_charger_'+i+'"></ul></div></div>'
+    +'<div class="field"><label>SOC sensor (%)</label><div class="combo"><input class="combo-input" id="s_ev_soc_'+i+'" placeholder="Search % sensor..." autocomplete="off"><ul class="combo-list" id="sl_ev_soc_'+i+'"></ul></div></div>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.4rem">'
+    +'<div class="field"><label>Target SOC (%)</label><input type="number" id="ev_target_soc_'+i+'" value="'+(ev.target_soc!=null?ev.target_soc:80)+'" min="20" max="100"></div>'
+    +'<div class="field"><label>Departure</label><input type="time" id="ev_departure_'+i+'" value="'+(ev.departure_time||'07:00')+'"></div>'
+    +'<div class="field"><label>Max (W)</label><input type="number" id="ev_max_w_'+i+'" value="'+(ev.max_charge_w!=null?ev.max_charge_w:7400)+'" min="1000" max="22000"></div>'
+    +'</div></div>';
+}
+
+function _setupEvCombos(i, ev) {
+  ev = ev || {};
+  setupCombo('ev_charger_'+i, _allEntities, ev.charger_switch||'', true, null);
+  setupCombo('ev_soc_'+i,     _allEntities, ev.soc_sensor||'',    false, ['%']);
+}
+
+function addEv() {
+  const i = _evCounter++;
+  const editEl = document.getElementById('ev-fleet-edit');
+  if (!editEl) return;
+  editEl.insertAdjacentHTML('beforeend', _evEntryHtml(i, {}));
+  _setupEvCombos(i, {});
+}
+
+function removeEv(idx) {
+  const entry = document.getElementById('ev-entry-'+idx);
+  if (entry) entry.remove();
+}
+
+async function saveEvFleet() {
+  const evs = [];
+  document.querySelectorAll('.ev-entry').forEach(function(entry) {
+    const i = entry.dataset.idx;
+    evs.push({
+      name:           document.getElementById('ev_name_'+i) ? document.getElementById('ev_name_'+i).value : 'EV',
+      charger_switch: getComboValue('ev_charger_'+i),
+      soc_sensor:     getComboValue('ev_soc_'+i),
+      target_soc:     parseInt((document.getElementById('ev_target_soc_'+i)||{value:80}).value),
+      departure_time: (document.getElementById('ev_departure_'+i)||{value:'07:00'}).value,
+      max_charge_w:   parseInt((document.getElementById('ev_max_w_'+i)||{value:7400}).value),
+    });
+  });
+  await fetch(BASE+'/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({evs: evs})});
+  await loadSettings();
+  toggleEdit('sg-ev');
+  showToast();
+}
+
+function renderEvCards(evs) {
+  const socEl = document.getElementById('ev-soc-cards');
+  const decEl = document.getElementById('ev-decision-cards');
+  if (!socEl || !decEl) return;
+  if (!evs.length) { socEl.innerHTML = ''; decEl.innerHTML = ''; return; }
+  socEl.innerHTML = evs.map(function(ev) {
+    return '<div class="card"><div class="card-label">'+ev.name+'</div>'
+      +'<div class="card-value">'+(ev.soc!=null ? ev.soc+'%' : '--')+'</div>'
+      +'<div class="card-sub">'+(ev.connected ? 'Connected' : 'Disconnected')+'</div></div>';
+  }).join('');
+  decEl.innerHTML = evs.map(function(ev) {
+    return '<div class="card"><div class="card-label">'+ev.name+'</div>'
+      +'<div>'+badge(ev.decision, EV_MAP)+'</div></div>';
+  }).join('');
+}
+
 refresh();
 setInterval(refresh, 10000);
 
-// ── ENERGY TAB ────────────────────────────────────────────────
-
+// ENERGY TAB
 async function loadEpex() {
   try { _epexData = await fetch(BASE+'/api/epex').then(r=>r.json()); } catch(e){}
   renderEpex();
@@ -1177,9 +1154,8 @@ function drawEpexChart(slots) {
     type:'bar',
     data:{labels,datasets:[{data:vals,backgroundColor:colors,borderRadius:2}]},
     options:{
-      responsive:true,maintainAspectRatio:false,
-      animation:{duration:500},
-      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.parsed.y.toFixed(2)} ct/kWh`}}},
+      responsive:true,maintainAspectRatio:false,animation:{duration:500},
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>' '+c.parsed.y.toFixed(2)+' ct/kWh'}}},
       scales:{
         x:{ticks:{color:getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()||'#6b7280',maxTicksLimit:10,font:{size:9}},grid:{display:false}},
         y:{ticks:{color:getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()||'#6b7280',font:{size:9},callback:v=>v+' ct'},grid:{color:getComputedStyle(document.documentElement).getPropertyValue('--border').trim()||'#e5e7eb'}}
@@ -1199,18 +1175,16 @@ function renderSchedule(slots) {
     const pct=mx>mn?Math.round((s.price_eur_kwh-mn)/(mx-mn)*100):50;
     const col=pct<33?'var(--green)':pct>66?'var(--red)':'var(--yellow)';
     const t=new Date(s.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    return `<tr class="${isCur?'cur':''}"><td>${t}</td><td>${(s.price_eur_kwh*100).toFixed(2)}</td><td><div class="pbar" style="width:${Math.max(4,pct)}%;background:${col}"></div></td></tr>`;
+    return '<tr class="'+(isCur?'cur':'')+'"><td>'+t+'</td><td>'+(s.price_eur_kwh*100).toFixed(2)+'</td><td><div class="pbar" style="width:'+Math.max(4,pct)+'%;background:'+col+'"></div></td></tr>';
   }).join('');
   const cur=tbody.querySelector('tr.cur');
   if(cur) setTimeout(()=>cur.scrollIntoView({block:'nearest',behavior:'smooth'}),100);
 }
 
-// Refresh every 60s to keep current-slot highlight up to date
 setInterval(()=>{ if(_epexData) renderEpex(); }, 60*1000);
-// Re-fetch full data every 15 min (prices update once/day ~13:00)
 setInterval(loadEpex, 15*60*1000);
 
-// ── POWER HISTORY CHART ───────────────────────────────────────────────────────
+// POWER HISTORY CHART
 let _powerChart = null;
 
 async function loadPowerChart() {
@@ -1242,7 +1216,7 @@ function renderPowerChart(series) {
     const c = COLORS[role];
     return {
       label: LABELS[role],
-      data: pts.map(([t, v]) => ({ x: new Date(t).getTime(), y: +(v/1000).toFixed(3) })),
+      data: pts.map(function(p) { return { x: new Date(p[0]).getTime(), y: +(p[1]/1000).toFixed(3) }; }),
       borderColor: c.line,
       backgroundColor: c.fill,
       fill: role !== 'house',
@@ -1261,29 +1235,19 @@ function renderPowerChart(series) {
     type: 'line',
     data: { datasets },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      parsing: false,
-      normalized: true,
+      responsive: true, maintainAspectRatio: false, animation: false,
+      parsing: false, normalized: true,
       scales: {
         x: {
-          type: 'linear',
-          min: t0,
-          max: now,
-          ticks: {
-            stepSize: 3600000,
-            maxTicksLimit: 13,
-            callback: v => {
-              const d = new Date(v);
-              return d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes();
-            },
+          type: 'linear', min: t0, max: now,
+          ticks: { stepSize: 3600000, maxTicksLimit: 13,
+            callback: function(v) { const d=new Date(v); return d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(); }
           },
           grid: { color: 'rgba(128,128,128,0.1)' },
         },
         y: {
           grid: { color: 'rgba(128,128,128,0.1)' },
-          ticks: { callback: v => v+' kW' },
+          ticks: { callback: function(v) { return v+' kW'; } },
         },
       },
       plugins: {
@@ -1291,8 +1255,8 @@ function renderPowerChart(series) {
         tooltip: {
           mode: 'index', intersect: false,
           callbacks: {
-            title: items => { const d = new Date(items[0].parsed.x); return d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(); },
-            label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} kW`,
+            title: function(items) { const d=new Date(items[0].parsed.x); return d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(); },
+            label: function(c) { return ' '+c.dataset.label+': '+c.parsed.y.toFixed(2)+' kW'; },
           },
         },
       },
@@ -1302,7 +1266,7 @@ function renderPowerChart(series) {
 }
 
 loadPowerChart();
-setInterval(loadPowerChart, 10 * 60 * 1000); // refresh every 10 min
+setInterval(loadPowerChart, 10 * 60 * 1000);
 </script>
 </body>
 </html>

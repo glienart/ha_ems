@@ -2,19 +2,20 @@
 
 A Home Assistant add-on that optimizes solar self-consumption, battery cycling, and EV charging using a rule-based engine and real-time EPEX SPOT day-ahead prices. Everything is configured from a built-in ingress dashboard — no YAML required.
 
-![Version](https://img.shields.io/badge/version-0.5.2-blue) ![HA](https://img.shields.io/badge/Home%20Assistant-add--on-41BDF5)
+![Version](https://img.shields.io/badge/version-0.5.5-blue) ![HA](https://img.shields.io/badge/Home%20Assistant-add--on-41BDF5)
 
 ---
 
 ## Features
 
-- **Rule-based optimizer** — decides every N seconds whether to charge/discharge the battery and charge the EV, based on solar production, grid state, tariff, and battery SOC
+- **Rule-based optimizer** — decides every N seconds whether to charge/discharge the battery and charge EVs, based on solar production, grid state, tariff, and battery SOC
 - **EPEX SPOT prices** — fetches day-ahead prices from the ENTSO-E Transparency Platform; supports 15 European bidding zones
 - **Effective tariff formula** — models your real electricity bill as `a × EPEX + b` separately for consumption and injection (covers grid fees, taxes, supplier margin)
 - **Interactive dashboard** — live energy flow diagram with animated SVG paths, EPEX bar chart with cheap/expensive zones, decision cards
 - **Searchable sensor picker** — comboboxes filtered by unit (W/kW for power, % for SOC, €/kWh for tariff, `switch.*` for switches)
 - **Settings persistence** — all configuration is saved to `/data/settings.json` and survives add-on updates
-- **Virtual HA sensors** — exposes EMS mode, battery decision, EV decision, solar surplus, and reasoning as standard HA entities
+- **Multi-EV support** — configure multiple vehicles, each with its own charger switch, SOC sensor, target SOC, departure time, and charge power; the optimizer decides each independently
+- **Virtual HA sensors** — exposes EMS mode, battery decision, per-EV decisions, solar surplus, and reasoning as standard HA entities
 
 ---
 
@@ -98,7 +99,7 @@ Live cards updated every 5 seconds:
 |------|-------------|
 | Solar surplus | Estimated excess solar production (W) |
 | Battery SOC | Current state of charge (%) |
-| EV SOC | Current EV state of charge (%) |
+| EV SOC (per vehicle) | One card per configured EV, showing SOC and connection state |
 | Buy price | Effective consumption price (€/kWh) after `ax+b` formula; sub-label shows sell price |
 
 **Energy flow diagram** — an animated replica of the HA Energy Distribution card showing active power flows as moving dots:
@@ -114,7 +115,7 @@ Live cards updated every 5 seconds:
 | Card | Values |
 |------|--------|
 | Battery decision | charge / discharge / standby / idle |
-| EV decision | charge / pause |
+| EV decision (per vehicle) | charge / pause — one badge per configured vehicle |
 | Reason | Plain-text explanation of the current decision |
 
 **Mode selector** — switches between AUTO / ECO / CHEAP / MANUAL / OFF.
@@ -153,15 +154,24 @@ All sensors filtered to units W or kW.
 | Min SOC | 10% | Never discharge below this |
 | Max SOC | 95% | Never charge above this |
 
-#### EV
+#### EV Fleet
+
+You can configure any number of vehicles. Each vehicle has its own card in the Settings tab with the following fields:
 
 | Field | Default | Description |
 |-------|---------|-------------|
+| Name | EV | Display name for this vehicle (e.g. "Skoda Enyaq") |
 | Charger switch | — | Switch to start/stop charging |
-| SOC sensor | — | EV state of charge (%) |
+| SOC sensor | — | EV state of charge (%) — optional; if absent, the optimizer assumes the vehicle needs charge when the switch is on |
 | Target SOC | 80% | Charge EV up to this level |
 | Departure time | 07:00 | Used to define the overnight charge window (21:00 → departure) |
 | Max charge power | 7400 W | EV charger power limit |
+
+Use the **+ Add vehicle** button to add more EVs, and **✕** to remove one. Click **Save fleet** to persist the list.
+
+The optimizer decides each EV independently: if a vehicle is connected (charger switch ON or SOC reading present) and its SOC is below the target, it charges when conditions are met (cheap tariff, solar surplus, or overnight window). Multiple EVs can charge simultaneously.
+
+**Migration from < 0.5.5:** if you had a single EV configured, it is automatically converted to a one-entry fleet on the first boot after the upgrade.
 
 #### Tariff & Optimizer
 
@@ -194,24 +204,24 @@ Example for a Belgian Fluvius dynamic contract (approximate):
 
 Rule priority order, evaluated each cycle:
 
-1. **Battery below min SOC** → force charge from grid, pause EV
-2. **Cheap tariff** (effective buy price ≤ cheap threshold) → grid-charge battery and EV
-3. **Solar surplus** (> 200 W deadband) → charge battery first, then EV
-4. **Expensive tariff** (effective buy price ≥ expensive threshold) → discharge battery to cover load
-5. **EV overnight window** (21:00 → departure) → charge EV even without surplus
+1. **Battery below min SOC** → force charge from grid, pause all EVs
+2. **Cheap tariff** (effective buy price ≤ cheap threshold) → grid-charge battery and all connected EVs
+3. **Solar surplus** (> 200 W deadband) → charge battery first, then all connected EVs
+4. **Expensive tariff** (effective buy price ≥ expensive threshold) → discharge battery to cover load, pause EVs
+5. **EV overnight window** (21:00 → departure) → charge each EV independently if within its window
 6. **Default** → idle
 
 ### ECO
 
 Maximises self-consumption, ignores tariff:
-- Solar surplus → charge battery, then EV
+- Solar surplus → charge battery, then all connected EVs
 - Grid import + battery above min SOC → discharge battery
 - Otherwise → idle
 
 ### CHEAP
 
 Only acts on tariff:
-- Effective buy price ≤ cheap threshold → charge battery and EV from grid
+- Effective buy price ≤ cheap threshold → charge battery and all connected EVs from grid
 - Otherwise → idle
 
 ### MANUAL
@@ -232,7 +242,7 @@ The add-on creates these entities on each optimizer cycle. They are available in
 |--------|------|-------------|
 | `sensor.ha_ems_mode` | sensor | Current EMS mode |
 | `sensor.ha_ems_battery_decision` | sensor | charge / discharge / standby / idle |
-| `sensor.ha_ems_ev_decision` | sensor | charge / pause |
+| `sensor.ha_ems_ev_{name}_decision` | sensor | charge / pause — one per vehicle (name is lowercased, spaces→underscores) |
 | `sensor.ha_ems_solar_surplus` | sensor (W) | Estimated excess solar available |
 | `sensor.ha_ems_reason` | sensor | Human-readable explanation of last decision |
 | `sensor.ha_ems_epex_price` | sensor (€/kWh) | Current EPEX slot price with today/tomorrow statistics |

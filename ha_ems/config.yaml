@@ -1,6 +1,6 @@
 name: "Home Energy Management System"
 description: "Solar, battery and EV charging optimizer with built-in dashboard"
-version: "0.5.4"
+version: "0.5.5"
 slug: ha_ems
 url: "https://github.com/glienart/ha_ems"
 init: false
