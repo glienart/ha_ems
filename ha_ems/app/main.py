@@ -49,6 +49,10 @@ _epex_task: Optional[asyncio.Task] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _loop_task, _epex_task
+    # Persist whatever was loaded (options.json + settings.json) back to
+    # settings.json so all fields survive future restarts/updates.
+    settings_module.save_runtime(_settings)
+    _LOGGER.info("Settings persisted to disk on startup")
     _loop_task = asyncio.create_task(ems_loop())
     _LOGGER.info("EMS optimizer loop started")
     if _settings.epex_token:
@@ -169,6 +173,15 @@ async def run_optimizer():
     if _epex_data and _epex_data.get("current_price") is not None:
         tariff = _epex_data["current_price"]
 
+    # Apply ax+b formula — effective prices are what the user actually pays/receives
+    epex_raw = tariff
+    if tariff is not None:
+        effective_consumption = tariff * s.tariff_a_consumption + s.tariff_b_consumption
+        effective_injection   = tariff * s.tariff_a_injection   + s.tariff_b_injection
+    else:
+        effective_consumption = None
+        effective_injection   = None
+
     snap = EmsSnapshot(
         solar_power_w=solar_w,
         grid_power_w=grid_w,
@@ -183,7 +196,7 @@ async def run_optimizer():
         ev_target_soc=s.ev_target_soc,
         ev_departure_time=s.ev_departure_time,
         ev_max_charge_w=s.ev_max_charge_w,
-        tariff_eur_kwh=tariff,
+        tariff_eur_kwh=effective_consumption,
         cheap_threshold=s.cheap_threshold,
         expensive_threshold=s.expensive_threshold,
         mode=s.mode,
@@ -249,7 +262,9 @@ async def run_optimizer():
         "grid_w": round(grid_w),
         "battery_soc": round(bat_soc),
         "ev_soc": round(ev_soc) if ev_soc is not None else None,
-        "tariff": tariff,
+        "tariff": round(effective_consumption, 4) if effective_consumption is not None else None,
+        "tariff_injection": round(effective_injection, 4) if effective_injection is not None else None,
+        "epex_raw": round(epex_raw, 4) if epex_raw is not None else None,
         "battery_w": round(bat_power) if bat_power is not None else None,
         "epex_price": _epex_data.get("current_price") if _epex_data else None,
         "reason": decision.reason,
@@ -298,6 +313,10 @@ class SettingsUpdate(BaseModel):
     ev_departure_time: Optional[str] = None
     ev_max_charge_w: Optional[int] = None
     tariff_sensor: Optional[str] = None
+    tariff_a_consumption: Optional[float] = None
+    tariff_b_consumption: Optional[float] = None
+    tariff_a_injection: Optional[float] = None
+    tariff_b_injection: Optional[float] = None
     cheap_threshold: Optional[float] = None
     expensive_threshold: Optional[float] = None
     update_interval: Optional[int] = None
@@ -542,7 +561,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="card"><div class="card-label">Solar surplus</div><div class="card-value" id="surplus">--</div><div class="card-sub">W available</div></div>
     <div class="card"><div class="card-label">Battery SOC</div><div class="card-value" id="batSoc">--</div><div class="card-sub">%</div></div>
     <div class="card"><div class="card-label">EV SOC</div><div class="card-value" id="evSoc">--</div><div class="card-sub">%</div></div>
-    <div class="card"><div class="card-label">Tariff</div><div class="card-value" id="tariff">--</div><div class="card-sub">EUR/kWh</div></div>
+    <div class="card"><div class="card-label">Buy price</div><div class="card-value" id="tariff">--</div><div class="card-sub" id="tariff-sell-sub">€/kWh</div></div>
   </div>
   <div class="section-title">Decisions</div>
   <div class="grid">
@@ -622,13 +641,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="sg-row"><span class="sg-key">Cheap &lt;</span><span id="v_cheap_threshold" class="sg-val">—</span></div>
         <div class="sg-row"><span class="sg-key">Expensive &gt;</span><span id="v_expensive_threshold" class="sg-val">—</span></div>
         <div class="sg-row"><span class="sg-key">Update interval</span><span id="v_update_interval" class="sg-val">—</span></div>
+        <div class="sg-row"><span class="sg-key">Conso a (×EPEX)</span><span id="v_tariff_a_consumption" class="sg-val">—</span></div>
+        <div class="sg-row"><span class="sg-key">Conso b (€/kWh)</span><span id="v_tariff_b_consumption" class="sg-val">—</span></div>
+        <div class="sg-row"><span class="sg-key">Inject a (×EPEX)</span><span id="v_tariff_a_injection" class="sg-val">—</span></div>
+        <div class="sg-row"><span class="sg-key">Inject b (€/kWh)</span><span id="v_tariff_b_injection" class="sg-val">—</span></div>
       </div>
       <div id="sg-tariff-edit" class="sg-edit" style="display:none">
         <div class="field"><label>Price sensor (EUR/kWh, optional)</label><div class="combo"><input class="combo-input" id="s_tariff_sensor" placeholder="Search price sensor…" autocomplete="off"><ul class="combo-list" id="sl_tariff_sensor"></ul></div></div>
-        <div class="field"><label>Cheap threshold (EUR/kWh)</label><input type="number" id="s_cheap_threshold" step="0.01" min="0" max="1"></div>
-        <div class="field"><label>Expensive threshold (EUR/kWh)</label><input type="number" id="s_expensive_threshold" step="0.01" min="0" max="1"></div>
+        <div class="field"><label>Cheap threshold — prix effectif conso (€/kWh)</label><input type="number" id="s_cheap_threshold" step="0.01" min="0" max="1"></div>
+        <div class="field"><label>Expensive threshold — prix effectif conso (€/kWh)</label><input type="number" id="s_expensive_threshold" step="0.01" min="0" max="1"></div>
         <div class="field"><label>Update interval (s)</label><input type="number" id="s_update_interval" min="10" max="3600"></div>
-        <button class="save-btn" onclick="saveGroup(['tariff_sensor','cheap_threshold','expensive_threshold','update_interval'],'sg-tariff')">Save</button>
+        <div style="margin:.5rem 0 .25rem;font-size:.8rem;color:var(--muted)">Prix effectif = a × EPEX + b</div>
+        <div class="field"><label>Consommation — a (multiplicateur EPEX)</label><input type="number" id="s_tariff_a_consumption" step="0.001" min="0" max="10"></div>
+        <div class="field"><label>Consommation — b (fixe, €/kWh)</label><input type="number" id="s_tariff_b_consumption" step="0.001" min="-1" max="1"></div>
+        <div class="field"><label>Injection — a (multiplicateur EPEX)</label><input type="number" id="s_tariff_a_injection" step="0.001" min="0" max="10"></div>
+        <div class="field"><label>Injection — b (fixe, €/kWh)</label><input type="number" id="s_tariff_b_injection" step="0.001" min="-1" max="1"></div>
+        <button class="save-btn" onclick="saveGroup(['tariff_sensor','cheap_threshold','expensive_threshold','update_interval','tariff_a_consumption','tariff_b_consumption','tariff_a_injection','tariff_b_injection'],'sg-tariff')">Save</button>
       </div>
     </div>
 
@@ -796,7 +824,9 @@ async function refresh() {
     document.getElementById("surplus").textContent = d.solar_surplus_w ?? "--";
     document.getElementById("batSoc").textContent  = d.battery_soc!=null ? d.battery_soc+"%" : "--";
     document.getElementById("evSoc").textContent   = d.ev_soc!=null ? d.ev_soc+"%" : "--";
-    document.getElementById("tariff").textContent  = d.tariff!=null ? d.tariff.toFixed(3) : "--";
+    document.getElementById("tariff").textContent = d.tariff!=null ? d.tariff.toFixed(3) : "--";
+    const sellSub = document.getElementById("tariff-sell-sub");
+    if (sellSub) sellSub.textContent = d.tariff_injection!=null ? `€/kWh buy · sell ${d.tariff_injection.toFixed(3)}` : '€/kWh';
     document.getElementById("batDecision").innerHTML = badge(d.battery, BAT_MAP);
     document.getElementById("evDecision").innerHTML  = badge(d.ev, EV_MAP);
     document.getElementById("reason").textContent  = d.reason || "--";
@@ -808,30 +838,36 @@ async function refresh() {
 
 function updateFlow(d) {
   const set  = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
-  const show = (id,v) => { const el=document.getElementById(id); if(el) el.style.display=v?'':'none'; };
+  // Use 'inline' explicitly for SVG — empty string may not override display:none in all browsers
+  const show = (id,on) => { const el=document.getElementById(id); if(el) el.style.display = on ? 'inline' : 'none'; };
 
-  const solar   = d.solar_w   ?? 0;
-  const grid    = d.grid_w    ?? 0;  // + = importing, - = exporting
+  const solar   = d.solar_w ?? 0;
+  const grid    = d.grid_w  ?? 0;  // + = importing from grid, - = exporting to grid
   const batSoc  = d.battery_soc;
   const batDec  = d.battery || 'idle';
-  const homeEst = Math.max(0, solar + Math.max(0, grid) +
-                  (batDec==='discharge' ? (d.battery_max_discharge_w||0)*0.5 : 0) -
-                  (batDec==='charge'   ? (d.battery_max_charge_w||0)*0.5   : 0));
+  const batW    = d.battery_w;     // W: + = charging, - = discharging (actual measurement)
+
+  // Prefer actual battery_w measurement; fall back to optimizer decision
+  const batDischarging = batW != null ? batW < -50 : batDec === 'discharge';
+  const batCharging    = batW != null ? batW >  50  : batDec === 'charge';
+
+  const homeEst = Math.max(0, solar + Math.max(0, grid)
+                  + (batDischarging ? Math.abs(batW ?? 0) : 0)
+                  - (batCharging    ? (batW ?? 0)         : 0));
 
   set('ev-solar',    solar > 0 ? solar+' W' : '0 W');
   set('ev-grid',     Math.abs(grid)+' W');
   set('ev-grid-dir', grid > 0 ? 'Import' : grid < 0 ? 'Export' : 'Idle');
   set('ev-home',     homeEst > 0 ? Math.round(homeEst)+' W' : '-- W');
   set('ev-bat',      batSoc!=null ? batSoc+'%' : '--');
-  const batW = d.battery_w;
   set('ev-bat-dec',  batW!=null ? (batW>50?'↑ '+batW+' W':batW<-50?'↓ '+Math.abs(batW)+' W':'idle') : batDec);
 
-  // Animated dot visibility
-  show('edot-solar',    solar > 50);                        // solar → home
-  show('edot-return',   grid < -50);                        // solar/bat → grid (export)
-  show('edot-grid',     grid >  50);                        // grid → home (import)
-  show('edot-bat-home', batDec === 'discharge');             // battery → home
-  show('edot-bat-grid', batDec === 'discharge' && grid < 0); // battery → grid
+  // Animated dot visibility — based on actual measurements
+  show('edot-solar',    solar > 50);                            // solar → home
+  show('edot-return',   grid < -50);                            // export to grid (solar or bat surplus)
+  show('edot-grid',     grid >  50);                            // import from grid → home
+  show('edot-bat-home', batDischarging);                        // battery → home
+  show('edot-bat-grid', batDischarging && grid < -50);          // battery contributing to export
 }
 
 document.querySelectorAll(".mode-btn").forEach(btn => {
@@ -964,6 +1000,8 @@ async function loadSettings() {
     ev_target_soc:          v=>v+'%',       ev_max_charge_w:         v=>v+' W',
     cheap_threshold:        v=>v+' €/kWh', expensive_threshold:     v=>v+' €/kWh',
     update_interval:        v=>v+'s',       ev_departure_time:       v=>v,
+    tariff_a_consumption:   v=>'×'+v,       tariff_b_consumption:    v=>(v>=0?'+':'')+v+' €/kWh',
+    tariff_a_injection:     v=>'×'+v,       tariff_b_injection:      v=>(v>=0?'+':'')+v+' €/kWh',
   };
   for (const [key,fmt] of Object.entries(numFmt)) {
     const el = document.getElementById("s_"+key); if (el&&settingsRes[key]!=null) el.value = settingsRes[key];
@@ -987,7 +1025,7 @@ function toggleEdit(id) {
 async function saveGroup(keys, groupId) {
   const body = {};
   const intKeys   = ['battery_max_charge_w','battery_max_discharge_w','battery_min_soc','battery_max_soc','ev_target_soc','ev_max_charge_w','update_interval'];
-  const floatKeys = ['cheap_threshold','expensive_threshold'];
+  const floatKeys = ['cheap_threshold','expensive_threshold','tariff_a_consumption','tariff_b_consumption','tariff_a_injection','tariff_b_injection'];
   for (const key of keys) {
     let val;
     if (COMBO_FIELDS.includes(key)) {
