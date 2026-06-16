@@ -102,13 +102,13 @@ Live cards updated every 5 seconds:
 | EV SOC (per vehicle) | One card per configured EV, showing SOC and connection state |
 | Buy price | Effective consumption price (€/kWh) after `ax+b` formula; sub-label shows sell price |
 
-**Energy flow diagram** — an animated replica of the HA Energy Distribution card showing active power flows as moving dots:
+**Energy flow diagram** — animated power flow diagram (visible in the Energy tab). Only active flows are shown; inactive paths are hidden. Dot direction indicates flow direction:
 
 - 🟠 Solar → Home (orange): shows when solar > 50 W
-- 🔵 Export → Grid (blue): shows when grid < −50 W (exporting)
+- 🟠 Solar → Grid / export (orange): shows when grid < −50 W (exporting)
 - 🔵 Grid → Home (blue): shows when grid > 50 W (importing)
-- 🟢 Battery → Home (teal): shows when battery is discharging (battery_w < −50 W)
-- 🟢 Battery → Grid (teal): shows when battery is discharging and grid is also exporting
+- 🟢 Battery → Home (teal): shows when battery is discharging
+- 🟢 Battery → Grid (teal): shows when battery is discharging and grid is exporting
 
 **Decisions:**
 
@@ -122,9 +122,18 @@ Live cards updated every 5 seconds:
 
 ### Energy tab
 
-- **EPEX price chart** — bar chart of today's and tomorrow's day-ahead prices with horizontal lines for cheap/expensive thresholds and a highlight on the current slot; refreshes every 15 minutes, re-highlights every 60 seconds
-- **Price statistics** — today and tomorrow min/avg/max in €/kWh
-- **Current and next slot prices**
+Live stat cards at the top (Solar, Grid, Home, Battery) update every 10 seconds alongside the Dashboard.
+
+The animated **energy flow diagram** and **power history chart** sit side by side below the cards:
+
+- The flow diagram shows only active paths (inactive ones are hidden); PV export to grid is orange, grid import to home is blue, battery flows are teal.
+- The power chart plots Solar, Grid, Battery, and Consumption in kW since midnight. Curves are smoothed; all series share common 5-minute buckets so the hover tooltip always shows all four values.
+
+**EPEX SPOT prices:**
+
+- **Day-ahead price chart** — bar chart of today's and tomorrow's hourly prices, colour-coded green/yellow/red relative to today's range; current slot highlighted; refreshes every 15 minutes
+- **Price pills** — current, next slot, today min and max
+- **Hour schedule table** — scrollable list of all slots with a progress bar; auto-scrolls to the current hour
 
 ### Settings tab
 
