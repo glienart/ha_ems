@@ -864,75 +864,75 @@ function setupCombo(fieldKey, allEntities, currentVal) {
   const list  = document.getElementById('sl_'+fieldKey);
   if (!input || !list) return;
 
-  // Determine candidate pool
-  const isSwitch = SWITCH_FIELDS.includes(fieldKey);
+  // Build filtered pool
+  const isSwitch   = SWITCH_FIELDS.includes(fieldKey);
   const wantedUnits = FIELD_UNITS[fieldKey] || [];
   let pool;
   if (isSwitch) {
     pool = allEntities.filter(e => e.entity_id.startsWith('switch.')||e.entity_id.startsWith('input_boolean.'));
   } else if (wantedUnits.length) {
-    // prioritise matching units but show all sensors if pool would be empty
-    const pref = allEntities.filter(e => e.entity_id.startsWith('sensor.') && wantedUnits.some(u => (e.unit||'').toLowerCase().includes(u.toLowerCase())));
+    const pref = allEntities.filter(e =>
+      e.entity_id.startsWith('sensor.') &&
+      wantedUnits.some(u => (e.unit||'').toLowerCase().includes(u.toLowerCase()))
+    );
     pool = pref.length ? pref : allEntities.filter(e => e.entity_id.startsWith('sensor.'));
   } else {
     pool = allEntities.filter(e => e.entity_id.startsWith('sensor.'));
   }
 
-  // Set initial display value
+  // Set initial display
   input.dataset.value = currentVal || '';
-  if (currentVal) {
-    const found = pool.find(e => e.entity_id === currentVal) || allEntities.find(e => e.entity_id === currentVal);
-    input.value = found ? (found.friendly_name || found.entity_id) : currentVal;
-  } else {
-    input.value = '';
-  }
+  const findName = id => { const e = allEntities.find(x=>x.entity_id===id); return e ? (e.friendly_name||e.entity_id) : id; };
+  input.value = currentVal ? findName(currentVal) : '';
 
   function renderList(q) {
-    const lq = q.toLowerCase();
+    const lq = q.toLowerCase().trim();
     const matches = pool.filter(e =>
       !lq ||
       e.entity_id.toLowerCase().includes(lq) ||
-      (e.friendly_name||'').toLowerCase().includes(lq) ||
-      (e.unit||'').toLowerCase().includes(lq)
-    ).slice(0, 40);
+      (e.friendly_name||'').toLowerCase().includes(lq)
+    ).slice(0, 50);
     list.innerHTML =
       `<li data-id="" class="cl-none">— none —</li>` +
       matches.map(e => {
-        const name = e.friendly_name && e.friendly_name !== e.entity_id ? e.friendly_name : e.entity_id;
+        const name = (e.friendly_name && e.friendly_name !== e.entity_id) ? e.friendly_name : e.entity_id;
         const unit = e.unit ? `<span class="cl-unit">${e.unit}</span>` : '';
         return `<li data-id="${e.entity_id}" title="${e.entity_id}"><span class="cl-name">${name}</span>${unit}</li>`;
       }).join('');
-    list.style.display = '';
+    list.style.display = 'block';   // ← was '' which kept CSS display:none
   }
 
-  input.addEventListener('focus', () => renderList(input.value === (pool.find(e=>e.entity_id===input.dataset.value)||{}).friendly_name ? '' : input.value));
-  input.addEventListener('input', () => { input.dataset.value = ''; renderList(input.value); });
-  input.addEventListener('keydown', e => {
-    if (e.key==='Escape') { list.style.display='none'; input.blur(); }
+  // On focus: clear text so user can type freely, show full list
+  input.addEventListener('focus', () => {
+    input.value = '';
+    renderList('');
   });
+
+  input.addEventListener('input', () => {
+    input.dataset.value = '';
+    renderList(input.value);
+  });
+
+  input.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') { list.style.display = 'none'; input.blur(); }
+  });
+
+  // On blur: hide list, restore display name if selection was made
   input.addEventListener('blur', () => {
-    setTimeout(() => { list.style.display='none'; }, 180);
-    // If user typed but didn't select, restore display name of current value
-    if (!input.dataset.value && currentVal) {
-      const found = pool.find(e=>e.entity_id===currentVal)||allEntities.find(e=>e.entity_id===currentVal);
-      input.value = found ? (found.friendly_name||found.entity_id) : currentVal;
-      input.dataset.value = currentVal;
-    } else if (!input.dataset.value) {
-      input.value = '';
-    }
+    setTimeout(() => { list.style.display = 'none'; }, 200);
+    // Restore friendly name of the currently selected value
+    const sel = input.dataset.value;
+    input.value = sel ? findName(sel) : '';
   });
+
+  // mousedown fires before blur — capture selection first
   list.addEventListener('mousedown', ev => {
+    ev.preventDefault();   // prevent blur from firing before we read the click
     const li = ev.target.closest('li'); if (!li) return;
     input.dataset.value = li.dataset.id;
-    if (li.dataset.id) {
-      const found = pool.find(e=>e.entity_id===li.dataset.id);
-      input.value = found ? (found.friendly_name||found.entity_id) : li.dataset.id;
-    } else {
-      input.value = '';
-    }
-    list.style.display = 'none';
-    // update currentVal for blur restore
-    currentVal = li.dataset.id;
+    currentVal          = li.dataset.id;
+    input.value         = li.dataset.id ? findName(li.dataset.id) : '';
+    list.style.display  = 'none';
   });
 }
 
