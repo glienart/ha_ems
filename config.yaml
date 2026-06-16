@@ -1,6 +1,6 @@
 name: "Home Energy Management System"
 description: "Solar, battery and EV charging optimizer with built-in dashboard"
-version: "0.3.0"
+version: "0.5.7"
 slug: ha_ems
 url: "https://github.com/glienart/ha_ems"
 init: false
@@ -21,5 +21,10 @@ panel_title: "EMS"
 map:
   - data:rw
 
-options: {}
-schema: {}
+options:
+  epex_token: ""
+  epex_zone: "BE"
+
+schema:
+  epex_token: str?
+  epex_zone: list(BE|FR|DE-LU|NL|AT|CH|ES|PT|IT-N|DK1|DK2|SE3|NO2|FI|PL|CZ)?
