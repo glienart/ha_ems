@@ -288,6 +288,69 @@ async def api_epex():
     return JSONResponse(_epex_data or {"error": "No EPEX data — check token and zone in settings"})
 
 
+@app.get("/api/power_history")
+async def api_power_history():
+    """Return today's power history for Solar / Grid / Battery / House sensors."""
+    now_local = datetime.now()
+    start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    roles = {
+        "solar":   _settings.solar_power_sensor,
+        "grid":    _settings.grid_power_sensor,
+        "battery": _settings.battery_power_sensor,
+        "house":   _settings.house_power_sensor,
+    }
+    id_to_role = {v: k for k, v in roles.items() if v}
+    sensors = list(id_to_role.keys())
+
+    if not sensors:
+        return JSONResponse({"series": {}})
+
+    url = f"{ha_client.HA_API}/history/period/{start.isoformat()}"
+    params = {
+        "filter_entity_id": ",".join(sensors),
+        "minimal_response": "true",
+        "significant_changes_only": "false",
+    }
+    try:
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(url, headers=ha_client._headers(), params=params)
+            if r.status_code != 200:
+                return JSONResponse({"series": {}})
+            data = r.json()
+    except Exception as exc:
+        _LOGGER.error("power_history error: %s", exc)
+        return JSONResponse({"series": {}})
+
+    series: dict[str, list] = {}
+    for entity_history in data:
+        if not entity_history:
+            continue
+        # First entry always has entity_id
+        entity_id = entity_history[0].get("entity_id", "")
+        role = id_to_role.get(entity_id)
+        if not role:
+            continue
+        points = []
+        for state in entity_history:
+            raw = state.get("state") or state.get("s", "")
+            ts  = state.get("last_changed") or state.get("lc") or state.get("lu") or ""
+            try:
+                val = float(raw)
+                # Newer HA returns lc/lu as epoch float seconds
+                if isinstance(ts, (int, float)):
+                    from datetime import timezone as _tz
+                    ts = datetime.fromtimestamp(ts, tz=_tz.utc).isoformat()
+                points.append([ts, round(val, 1)])
+            except (ValueError, TypeError):
+                pass
+        if points:
+            series[role] = points
+
+    return JSONResponse({"series": series})
+
+
 @app.get("/api/settings")
 async def api_get_settings():
     from dataclasses import asdict
@@ -666,10 +729,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <!-- ENERGY PAGE -->
 <div id="page-energy" class="page">
 
-  <!-- HA-style Energy Distribution -->
+  <!-- HA-style Energy Distribution + Power chart side by side -->
   <div class="card" style="margin-bottom:.75rem;padding:1rem">
-    <div class="card-label" style="margin-bottom:.5rem">Energy distribution</div>
-    <div class="ha-e-wrap">
+    <div style="display:grid;grid-template-columns:420px 1fr;gap:2rem;align-items:center">
+      <div>
+        <div class="card-label" style="margin-bottom:.5rem;text-align:center">Live flow</div>
+        <div class="ha-e-wrap">
 
       <!-- Solar -->
       <div class="ha-e-node solar">
@@ -729,7 +794,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <circle r="1.2" class="d-bat-home" id="edot-bat-home" style="display:none"><animateMotion dur="3.5s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-home"/></animateMotion></circle>
         <circle r="1.2" class="d-bat-grid" id="edot-bat-grid" style="display:none"><animateMotion dur="4s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-grid"/></animateMotion></circle>
       </svg>
-    </div>
+        </div><!-- end ha-e-wrap -->
+      </div><!-- end flow column -->
+      <div style="min-width:0">
+        <div class="card-label" style="margin-bottom:.5rem">Power sources</div>
+        <div style="position:relative;height:400px">
+          <canvas id="power-chart"></canvas>
+        </div>
+      </div><!-- end chart column -->
+    </div><!-- end grid -->
   </div>
 
   <!-- EPEX prices -->
@@ -1136,6 +1209,100 @@ function renderSchedule(slots) {
 setInterval(()=>{ if(_epexData) renderEpex(); }, 60*1000);
 // Re-fetch full data every 15 min (prices update once/day ~13:00)
 setInterval(loadEpex, 15*60*1000);
+
+// ── POWER HISTORY CHART ───────────────────────────────────────────────────────
+let _powerChart = null;
+
+async function loadPowerChart() {
+  try {
+    const data = await fetch(BASE+'/api/power_history').then(r=>r.json());
+    renderPowerChart(data.series || {});
+  } catch(e) { console.error('Power chart:', e); }
+}
+
+function renderPowerChart(series) {
+  const ctx = document.getElementById('power-chart');
+  if (!ctx || typeof Chart === 'undefined') return;
+
+  const now = Date.now();
+  const midnight = new Date(); midnight.setHours(0,0,0,0);
+  const t0 = midnight.getTime();
+
+  const COLORS = {
+    solar:   { line:'rgb(255,152,0)',   fill:'rgba(255,152,0,0.15)'   },
+    grid:    { line:'rgb(72,143,194)',  fill:'rgba(72,143,194,0.15)'  },
+    battery: { line:'rgb(77,182,172)',  fill:'rgba(77,182,172,0.15)'  },
+    house:   { line:'rgb(80,80,80)',    fill:'rgba(80,80,80,0.08)'    },
+  };
+  const LABELS = { solar:'Solar', grid:'Grid', battery:'Battery', house:'Consumption' };
+
+  function toDataset(role) {
+    const pts = series[role];
+    if (!pts || !pts.length) return null;
+    const c = COLORS[role];
+    return {
+      label: LABELS[role],
+      data: pts.map(([t, v]) => ({ x: new Date(t).getTime(), y: +(v/1000).toFixed(3) })),
+      borderColor: c.line,
+      backgroundColor: c.fill,
+      fill: role !== 'house',
+      tension: 0.25,
+      borderWidth: role === 'house' ? 2 : 1.5,
+      borderDash: role === 'house' ? [5,3] : [],
+      pointRadius: 0,
+    };
+  }
+
+  const datasets = ['solar','grid','battery','house'].map(toDataset).filter(Boolean);
+  if (!datasets.length) return;
+
+  if (_powerChart) _powerChart.destroy();
+  _powerChart = new Chart(ctx, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      parsing: false,
+      normalized: true,
+      scales: {
+        x: {
+          type: 'linear',
+          min: t0,
+          max: now,
+          ticks: {
+            stepSize: 3600000,
+            maxTicksLimit: 13,
+            callback: v => {
+              const d = new Date(v);
+              return d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes();
+            },
+          },
+          grid: { color: 'rgba(128,128,128,0.1)' },
+        },
+        y: {
+          grid: { color: 'rgba(128,128,128,0.1)' },
+          ticks: { callback: v => v+' kW' },
+        },
+      },
+      plugins: {
+        legend: { labels: { boxWidth: 10, padding: 14, usePointStyle: true } },
+        tooltip: {
+          mode: 'index', intersect: false,
+          callbacks: {
+            title: items => { const d = new Date(items[0].parsed.x); return d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(); },
+            label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} kW`,
+          },
+        },
+      },
+      interaction: { mode: 'index', intersect: false },
+    },
+  });
+}
+
+loadPowerChart();
+setInterval(loadPowerChart, 10 * 60 * 1000); // refresh every 10 min
 </script>
 </body>
 </html>
