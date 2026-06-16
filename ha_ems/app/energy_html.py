@@ -74,6 +74,17 @@ ENERGY_HTML = r"""<!DOCTYPE html>
 
   .updated{font-size:.65rem;color:var(--border);text-align:right;margin-top:.4rem}
   .no-epex{font-size:.82rem;color:var(--muted);text-align:center;padding:2rem 0}
+
+  /* Schedule plan table */
+  .plan-table{width:100%;border-collapse:collapse;font-size:.75rem}
+  .plan-table th{color:var(--muted);font-size:.63rem;text-transform:uppercase;padding:.3rem .4rem;border-bottom:1px solid var(--border)}
+  .plan-table td{padding:.3rem .4rem;border-bottom:1px solid #1a2233}
+  .plan-table tr.plan-now td{background:#0f2318;font-weight:700}
+  .plan-badge{display:inline-block;padding:.1rem .45rem;border-radius:.3rem;font-size:.68rem;font-weight:600}
+  .plan-badge.charge{background:#1a3a2a;color:#34d399}
+  .plan-badge.discharge{background:#3a1a1a;color:#f87171}
+  .plan-badge.idle{background:#1f2937;color:var(--muted)}
+  .no-plan{font-size:.82rem;color:var(--muted);text-align:center;padding:1.5rem 0}
 </style>
 </head>
 <body>
@@ -140,6 +151,18 @@ ENERGY_HTML = r"""<!DOCTYPE html>
       </table>
     </div>
 
+
+    <!-- 24h Optimization Plan -->
+    <div class="card" style="max-height:420px;overflow-y:auto" id="plan-card">
+      <div class="card-title">24h Optimization Plan</div>
+      <div class="no-plan" id="no-plan">No schedule — configure panel or EPEX prices</div>
+      <table class="plan-table" id="plan-table" style="display:none">
+        <thead><tr><th>Time</th><th>Solar</th><th>Load</th><th>Price</th><th>Battery</th></tr></thead>
+        <tbody id="plan-body"></tbody>
+      </table>
+      <div class="updated" id="plan-updated"></div>
+    </div>
+
     <!-- Gauges -->
     <div class="card">
       <div class="card-title">Stats</div>
@@ -186,6 +209,8 @@ let _epex = null, _state = null, _epexChart = null, _currentDay = 'today';
 async function loadAll() {
   try { _state = await fetch(BASE+'/api/state').then(r=>r.json()); } catch(e){}
   try { _epex  = await fetch(BASE+'/api/epex').then(r=>r.json());  } catch(e){}
+
+  try { _forecast = await fetch(BASE+'/api/forecast').then(r=>r.json()); } catch(e){}
   render();
 }
 
@@ -197,6 +222,7 @@ function render() {
   renderEpex();
   renderFlow();
   renderGauges();
+  renderPlan();
 }
 
 // ── EPEX ──
@@ -445,6 +471,47 @@ function renderGauges() {
     drawGauge('g-max', mx ?? 0, 0.3, '#ef4444',    'ct');
     document.getElementById('g-min-lbl').textContent = mn != null ? (mn*100).toFixed(1)+' ct' : '--';
     document.getElementById('g-max-lbl').textContent = mx != null ? (mx*100).toFixed(1)+' ct' : '--';
+  }
+}
+
+
+// ── 24h Plan ──
+let _forecast = null;
+
+function renderPlan() {
+  if (!_forecast || !_forecast.schedule || !_forecast.schedule.length) {
+    document.getElementById('no-plan').style.display = '';
+    document.getElementById('plan-table').style.display = 'none';
+    return;
+  }
+  document.getElementById('no-plan').style.display = 'none';
+  document.getElementById('plan-table').style.display = '';
+
+  const nowH = new Date().getHours();
+  const tbody = document.getElementById('plan-body');
+  tbody.innerHTML = '';
+  const fmtW = w => w >= 1000 ? (w/1000).toFixed(1)+'k' : Math.round(w)+'';
+  const fmtP = p => p != null ? (p*100).toFixed(1) : '--';
+
+  for (const slot of _forecast.schedule) {
+    const h = new Date(slot.hour).getHours();
+    const isCurrent = h === nowH;
+    const tr = document.createElement('tr');
+    if (isCurrent) tr.className = 'plan-now';
+    const badge = `<span class="plan-badge ${slot.battery_action}">${slot.battery_action}</span>`;
+    tr.innerHTML = `
+      <td>${slot.hour_label}${isCurrent ? ' ◀' : ''}</td>
+      <td>${fmtW(slot.solar_w)} W</td>
+      <td>${fmtW(slot.consumption_w)} W</td>
+      <td>${fmtP(slot.buy_price)} ct</td>
+      <td>${badge}</td>`;
+    tbody.appendChild(tr);
+    if (isCurrent) tr.scrollIntoView({block:'nearest'});
+  }
+  const builtEl = document.getElementById('plan-updated');
+  if (builtEl && _forecast.built_at) {
+    const d = new Date(_forecast.built_at);
+    builtEl.textContent = 'Built ' + d.getHours() + ':' + String(d.getMinutes()).padStart(2,'0');
   }
 }
 

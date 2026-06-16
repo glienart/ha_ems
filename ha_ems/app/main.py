@@ -18,6 +18,8 @@ from . import ha_client, settings as settings_module
 from .energy_html import ENERGY_HTML
 from .epex import fetch_prices, resolve_zone
 from .optimizer import EmsOptimizer, EmsSnapshot, EvSnapshot
+from .forecast import fetch_solar_forecast, ConsumptionHistory
+from .scheduler import build_schedule, current_scheduled_action
 from .settings import EmsSettings
 
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +31,11 @@ _last_state: dict = {}
 _loop_task: Optional[asyncio.Task] = None
 _epex_data: dict = {}
 _epex_task: Optional[asyncio.Task] = None
+_solar_forecast: dict = {}
+_schedule: list = []
+_schedule_built_at: Optional[str] = None
+_consumption_history: ConsumptionHistory = ConsumptionHistory()
+_schedule_task: Optional[asyncio.Task] = None
 
 
 @asynccontextmanager
@@ -41,11 +48,15 @@ async def lifespan(app: FastAPI):
     if _settings.epex_token:
         _epex_task = asyncio.create_task(epex_loop())
         _LOGGER.info("EPEX price loop started (zone %s)", _settings.epex_zone)
+    _schedule_task = asyncio.create_task(schedule_loop())
+    _LOGGER.info("24h schedule loop started")
     yield
     if _loop_task:
         _loop_task.cancel()
     if _epex_task:
         _epex_task.cancel()
+    if _schedule_task:
+        _schedule_task.cancel()
     _LOGGER.info("EMS loops stopped")
 
 
@@ -78,6 +89,60 @@ async def epex_loop():
         except Exception as exc:
             _LOGGER.error("EPEX loop error: %s", exc)
         await asyncio.sleep(15 * 60)
+
+
+async def rebuild_schedule() -> None:
+    """Rebuild the 24h battery schedule from forecasts + EPEX prices."""
+    global _solar_forecast, _schedule, _schedule_built_at
+    s = _settings
+    if s.panel_kwp > 0:
+        try:
+            _solar_forecast = await fetch_solar_forecast(
+                s.latitude, s.longitude, s.panel_tilt, s.panel_azimuth, s.panel_kwp
+            )
+        except Exception as exc:
+            _LOGGER.error("Solar forecast error: %s", exc)
+    if not _epex_data:
+        _LOGGER.debug("No EPEX data — skipping schedule build")
+        return
+    all_epex = _epex_data.get("prices_today", []) + _epex_data.get("prices_tomorrow", [])
+    if not all_epex:
+        return
+    buy_prices  = [{**p, "price_eur_kwh": p["price_eur_kwh"]*s.tariff_a_consumption+s.tariff_b_consumption} for p in all_epex]
+    sell_prices = [{**p, "price_eur_kwh": p["price_eur_kwh"]*s.tariff_a_injection+s.tariff_b_injection} for p in all_epex]
+    bat_soc = await ha_client.get_float(s.battery_soc_sensor, default=50.0) or 50.0
+    try:
+        _schedule = build_schedule(
+            now=datetime.now(),
+            solar_forecast=_solar_forecast,
+            consumption_forecast=_consumption_history.forecast_next_24h(datetime.now()),
+            epex_buy_prices=buy_prices,
+            epex_sell_prices=sell_prices,
+            battery_soc_pct=bat_soc,
+            battery_capacity_kwh=s.battery_capacity_kwh,
+            battery_min_soc=s.battery_min_soc,
+            battery_max_soc=s.battery_max_soc,
+            battery_max_charge_kw=s.battery_max_charge_w / 1000,
+            battery_max_discharge_kw=s.battery_max_discharge_w / 1000,
+            n_cheap_slots=s.cheap_lookahead_slots,
+        )
+        _schedule_built_at = datetime.now().isoformat()
+        _LOGGER.info("24h schedule built: %d slots", len(_schedule))
+    except Exception as exc:
+        _LOGGER.error("Schedule build error: %s", exc)
+
+
+async def schedule_loop():
+    """Rebuild the 24h schedule every 30 minutes."""
+    await asyncio.sleep(15)  # brief startup delay for EPEX data
+    while True:
+        try:
+            await rebuild_schedule()
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            _LOGGER.error("Schedule loop error: %s", exc)
+        await asyncio.sleep(30 * 60)
 
 
 async def _publish_epex(data: dict) -> None:
@@ -150,6 +215,15 @@ async def run_optimizer():
             connected=connected,
         ))
 
+    # Record house consumption for forecast history
+    _eff_house = house_w if house_w is not None else (solar_w - grid_w if solar_w and grid_w else None)
+    if _eff_house is not None and _eff_house > 0:
+        _consumption_history.record(datetime.now(), _eff_house)
+
+    # Get scheduled action for this hour from 24h plan
+    _sched_slot = current_scheduled_action(_schedule, datetime.now())
+    _sched_bat  = _sched_slot.battery_action if _sched_slot else None
+
     snap = EmsSnapshot(
         solar_power_w=solar_w,
         grid_power_w=grid_w,
@@ -169,6 +243,7 @@ async def run_optimizer():
         epex_prices_today=_epex_data.get("prices_today", []) if _epex_data else [],
         mode=s.mode,
         now=datetime.now(),
+        scheduled_battery=_sched_bat,
     )
 
     decision = _optimizer.decide(snap)
@@ -253,6 +328,28 @@ async def api_epex():
     return JSONResponse(_epex_data or {"error": "No EPEX data -- check token and zone in settings"})
 
 
+@app.get("/api/forecast")
+async def api_forecast():
+    return JSONResponse({
+        "schedule": [
+            {
+                "hour": s.hour.isoformat(),
+                "hour_label": s.hour.strftime("%H:00"),
+                "solar_w": round(s.solar_forecast_w),
+                "consumption_w": round(s.consumption_forecast_w),
+                "buy_price": round(s.epex_buy_price, 4) if s.epex_buy_price is not None else None,
+                "battery_action": s.battery_action,
+                "battery_kw": s.battery_kw,
+                "reason": s.reason,
+            }
+            for s in _schedule
+        ],
+        "built_at": _schedule_built_at,
+        "has_solar_forecast": bool(_solar_forecast),
+        "has_history": _consumption_history.has_enough_data,
+    })
+
+
 @app.get("/api/power_history")
 async def api_power_history():
     now_local = datetime.now()
@@ -334,7 +431,16 @@ class SettingsUpdate(BaseModel):
     tariff_b_injection: Optional[float] = None
     cheap_threshold: Optional[float] = None
     expensive_threshold: Optional[float] = None
+    cheap_hysteresis: Optional[float] = None
+    expensive_hysteresis: Optional[float] = None
+    cheap_lookahead_slots: Optional[int] = None
     update_interval: Optional[int] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    panel_kwp: Optional[float] = None
+    panel_tilt: Optional[int] = None
+    panel_azimuth: Optional[int] = None
+    battery_capacity_kwh: Optional[float] = None
 
 
 @app.post("/api/settings")
@@ -350,6 +456,8 @@ async def api_update_settings(body: SettingsUpdate):
     if _loop_task and "update_interval" in data:
         _loop_task.cancel()
         asyncio.create_task(ems_loop())
+    if any(k in data for k in ("panel_kwp","latitude","longitude","panel_tilt","panel_azimuth","battery_capacity_kwh")):
+        asyncio.create_task(rebuild_schedule())
     await run_optimizer()
     return JSONResponse({"ok": True})
 
@@ -656,6 +764,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="field"><label>Hystérésis expensive (&#8364;/kWh)</label><input type="number" id="s_expensive_hysteresis" step="0.001" min="0" max="0.1"></div>
         <div class="field"><label>Look-ahead slots (N meilleurs slots EPEX)</label><input type="number" id="s_cheap_lookahead_slots" min="0" max="24"></div>
         <button class="save-btn" onclick="saveGroup(['tariff_sensor','cheap_threshold','expensive_threshold','cheap_hysteresis','expensive_hysteresis','cheap_lookahead_slots','update_interval','tariff_a_consumption','tariff_b_consumption','tariff_a_injection','tariff_b_injection'],'sg-tariff')">Save</button>
+      </div>
+    </div>
+
+
+    <!-- Forecast & Panel -->
+    <div class="settings-group">
+      <div class="sg-head"><h3>Forecast &amp; Panel</h3><button class="pencil-btn" onclick="toggleEdit('sg-panel')" title="Edit">&#x270E;</button></div>
+      <div id="sg-panel-view">
+        <div class="sg-row"><span class="sg-key">Location</span><span id="v_panel_location" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Panel</span><span id="v_panel_spec" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Battery capacity</span><span id="v_battery_capacity_kwh" class="sg-val">&#8212;</span></div>
+      </div>
+      <div id="sg-panel-edit" class="sg-edit" style="display:none">
+        <div class="field"><label>Latitude</label><input type="number" id="s_latitude" step="0.0001"></div>
+        <div class="field"><label>Longitude</label><input type="number" id="s_longitude" step="0.0001"></div>
+        <div class="field"><label>Panel power (kWp)</label><input type="number" id="s_panel_kwp" step="0.1" min="0"></div>
+        <div class="field"><label>Panel tilt (°, 0=horiz)</label><input type="number" id="s_panel_tilt" step="1" min="0" max="90"></div>
+        <div class="field"><label>Panel azimuth (° from S: 0=S -90=E 90=W)</label><input type="number" id="s_panel_azimuth" step="1" min="-180" max="180"></div>
+        <div class="field"><label>Battery capacity (kWh)</label><input type="number" id="s_battery_capacity_kwh" step="0.5" min="0"></div>
+        <button class="save-btn" onclick="saveGroup(['latitude','longitude','panel_kwp','panel_tilt','panel_azimuth','battery_capacity_kwh'],'sg-panel')">Save</button>
       </div>
     </div>
 
@@ -1021,6 +1149,32 @@ async function loadSettings() {
   const lookaheadEl = document.getElementById("v_cheap_lookahead_slots");
   if (lookaheadEl) lookaheadEl.textContent = (settingsRes.cheap_lookahead_slots??'?')+' slots';
 
+
+  // Panel & Forecast settings
+  const panelFmt = {
+    battery_capacity_kwh: v => v + ' kWh',
+    panel_kwp:            v => v + ' kWp',
+    panel_tilt:           v => v + '°',
+    panel_azimuth:        v => v + '°',
+    latitude:             v => v,
+    longitude:            v => v,
+  };
+  for (const [key, fmt] of Object.entries(panelFmt)) {
+    const el = document.getElementById('s_' + key);
+    if (el && settingsRes[key] != null) el.value = settingsRes[key];
+  }
+  const locEl = document.getElementById('v_panel_location');
+  if (locEl) locEl.textContent =
+    (settingsRes.latitude ?? 0) !== 0 || (settingsRes.longitude ?? 0) !== 0
+      ? `${settingsRes.latitude ?? '?'} / ${settingsRes.longitude ?? '?'}`
+      : 'Not configured';
+  const specEl = document.getElementById('v_panel_spec');
+  if (specEl) specEl.textContent = settingsRes.panel_kwp > 0
+    ? `${settingsRes.panel_kwp} kWp · Tilt ${settingsRes.panel_tilt ?? 35}° · Az ${settingsRes.panel_azimuth ?? 0}°`
+    : 'Not configured';
+  const capEl = document.getElementById('v_battery_capacity_kwh');
+  if (capEl) capEl.textContent = (settingsRes.battery_capacity_kwh ?? '?') + ' kWh';
+
   _currentEvs = settingsRes.evs || [];
   renderEvFleet(_currentEvs);
 }
@@ -1036,8 +1190,8 @@ function toggleEdit(id) {
 
 async function saveGroup(keys, groupId) {
   const body = {};
-  const intKeys   = ['battery_max_charge_w','battery_max_discharge_w','battery_min_soc','battery_max_soc','update_interval','cheap_lookahead_slots'];
-  const floatKeys = ['cheap_threshold','expensive_threshold','cheap_hysteresis','expensive_hysteresis','tariff_a_consumption','tariff_b_consumption','tariff_a_injection','tariff_b_injection'];
+  const intKeys   = ['battery_max_charge_w','battery_max_discharge_w','battery_min_soc','battery_max_soc','update_interval','cheap_lookahead_slots','panel_tilt','panel_azimuth'];
+  const floatKeys = ['cheap_threshold','expensive_threshold','cheap_hysteresis','expensive_hysteresis','tariff_a_consumption','tariff_b_consumption','tariff_a_injection','tariff_b_injection','latitude','longitude','panel_kwp','battery_capacity_kwh'];
   for (const key of keys) {
     let val;
     if (COMBO_FIELDS.includes(key)) {

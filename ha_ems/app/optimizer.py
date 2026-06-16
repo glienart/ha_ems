@@ -64,6 +64,7 @@ class EmsSnapshot:
     epex_prices_today: list = field(default_factory=list)
     mode: str = MODE_AUTO
     now: datetime = field(default_factory=datetime.now)
+    scheduled_battery: Optional[str] = None  # from 24h planner
 
 
 @dataclass
@@ -226,6 +227,19 @@ class EmsOptimizer:
             result.ev_decisions = self._decide_evs(snap, should_charge=False, urgent_set=urgent)
             result.reason = f"EV urgent charge before departure: {', '.join(ev.name for ev in urgent)}"
             return
+
+        # 2b. Follow 24h optimized schedule (overrides reactive rules 3–7)
+        if snap.scheduled_battery and snap.scheduled_battery != "idle":
+            if snap.scheduled_battery == "charge" and snap.battery_soc_pct < snap.battery_max_soc:
+                result.battery = BAT_CHARGE
+                result.ev_decisions = self._decide_evs(snap, should_charge=True)
+                result.reason = "24h optimized schedule — charge"
+                return
+            if snap.scheduled_battery == "discharge" and snap.battery_soc_pct > snap.battery_min_soc:
+                result.battery = BAT_DISCHARGE
+                result.ev_decisions = self._all_evs_pause(snap)
+                result.reason = "24h optimized schedule — discharge"
+                return
 
         # 3. Cheap tariff (hysteresis) or look-ahead optimal slot
         if (is_cheap or is_optimal) and snap.battery_soc_pct < snap.battery_max_soc:

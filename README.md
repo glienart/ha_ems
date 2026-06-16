@@ -2,12 +2,13 @@
 
 A Home Assistant add-on that optimizes solar self-consumption, battery cycling, and EV charging using a rule-based engine and real-time EPEX SPOT day-ahead prices. Everything is configured from a built-in ingress dashboard — no YAML required.
 
-![Version](https://img.shields.io/badge/version-0.5.6-blue) ![HA](https://img.shields.io/badge/Home%20Assistant-add--on-41BDF5)
+![Version](https://img.shields.io/badge/version-0.5.7-blue) ![HA](https://img.shields.io/badge/Home%20Assistant-add--on-41BDF5)
 
 ---
 
 ## Features
 
+- **24h cost optimizer** — plans the next 24 hours using solar production forecasts (Forecast.Solar API), historical consumption patterns, and EPEX day-ahead prices; the battery follows the schedule, falling back to real-time reactive rules
 - **Rule-based optimizer** — decides every N seconds whether to charge/discharge the battery and charge EVs, based on solar production, grid state, tariff, and battery SOC
 - **EPEX SPOT prices** — fetches day-ahead prices from the ENTSO-E Transparency Platform; supports 15 European bidding zones
 - **Effective tariff formula** — models your real electricity bill as `a × EPEX + b` separately for consumption and injection (covers grid fees, taxes, supplier margin)
@@ -38,7 +39,10 @@ ha_ems/
 ├── run.sh
 └── app/
     ├── main.py          # FastAPI app + full dashboard HTML/CSS/JS (single file)
-    ├── optimizer.py     # Stateless rule-based decision engine
+    ├── optimizer.py     # Stateful rule-based decision engine (hysteresis, look-ahead, urgency)
+    ├── scheduler.py     # 24h greedy cost optimizer (solar forecast + EPEX prices)
+    ├── forecast.py      # Forecast.Solar API client + consumption history buffer
+    ├── energy_html.py   # Energy tab HTML (flow diagram, EPEX chart, 24h plan)
     ├── settings.py      # Settings dataclass, load/save from /data/
     ├── epex.py          # ENTSO-E API client + XML parser
     ├── ha_client.py     # HA REST API client (get_state, set_entity_state, turn_on/off)
@@ -183,6 +187,21 @@ The optimizer decides each EV independently: if a vehicle is connected (charger 
 
 **Migration from < 0.5.5:** if you had a single EV configured, it is automatically converted to a one-entry fleet on the first boot after the upgrade.
 
+#### Forecast & Panel
+
+Required for the 24h cost optimizer to produce a solar-aware schedule. Leave `Panel power` at 0 to disable solar forecasting (the optimizer will still use EPEX prices + consumption history).
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| Latitude | 0.0 | Decimal latitude of the installation |
+| Longitude | 0.0 | Decimal longitude of the installation |
+| Panel power | 0 kWp | Peak DC power of the PV system |
+| Panel tilt | 35° | Tilt angle: 0 = horizontal, 90 = vertical |
+| Panel azimuth | 0° | Azimuth from south: 0 = south, −90 = east, 90 = west |
+| Battery capacity | 10 kWh | Usable battery capacity (needed for the 24h schedule) |
+
+Solar forecasts are fetched from [Forecast.Solar](https://forecast.solar) (free public API, no account needed). The forecast is refreshed every 30 minutes alongside the schedule rebuild.
+
 #### Tariff & Optimizer
 
 | Field | Default | Description |
@@ -219,11 +238,14 @@ Rule priority order, evaluated each cycle:
 
 1. **Battery below min SOC** → force charge from grid, pause all EVs
 2. **EV urgency** → if an EV must charge now to reach its target SOC before departure (based on SOC gap, capacity, and max charge power), charge it immediately regardless of tariff
-3. **Cheap tariff** (with hysteresis) or **EPEX look-ahead optimal slot** → grid-charge battery and all connected EVs
-4. **Solar surplus** (> 200 W deadband) → charge battery first, then all connected EVs
-5. **Expensive tariff** (with hysteresis) → discharge battery to cover load, pause EVs
-6. **EV overnight window** (21:00 → departure) → charge each EV independently if within its window
-7. **Default** → idle
+3. **24h optimized schedule** → if a day-ahead schedule has been computed (requires panel configuration + EPEX data), follow its charge/discharge recommendation for the current hour
+4. **Cheap tariff** (with hysteresis) or **EPEX look-ahead optimal slot** → grid-charge battery and all connected EVs
+5. **Solar surplus** (> 200 W deadband) → charge battery first, then all connected EVs
+6. **Expensive tariff** (with hysteresis) → discharge battery to cover load, pause EVs
+7. **EV overnight window** (21:00 → departure) → charge each EV independently if within its window
+8. **Default** → idle
+
+The 24h schedule is rebuilt every 30 minutes. It uses a two-pass greedy algorithm: first classifying hours as solar-surplus (free charge), cheapest-N grid slots (grid charge), or most-expensive deficit hours (discharge); then walking chronologically to ensure battery SOC constraints are respected.
 
 ### ECO
 
@@ -290,6 +312,7 @@ The add-on exposes a small REST API on its ingress port (used by the dashboard):
 | POST | `/api/mode` | Change optimizer mode |
 | GET | `/api/epex` | Latest EPEX price data (prices_today, prices_tomorrow, stats) |
 | GET | `/api/entities` | All HA entities (used to populate sensor picker) |
+| GET | `/api/forecast` | 24h battery schedule (per-hour action, solar/consumption forecast, EPEX price) |
 
 ---
 

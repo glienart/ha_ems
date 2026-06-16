@@ -47,6 +47,13 @@ class EmsSettings:
     mode: str = "auto"
     epex_token: str = ""
     epex_zone: str = "BE"
+    # Solar forecast & optimization
+    latitude: float = 0.0
+    longitude: float = 0.0
+    panel_kwp: float = 0.0
+    panel_tilt: int = 35
+    panel_azimuth: int = 0
+    battery_capacity_kwh: float = 10.0
 
 
 def load() -> EmsSettings:
