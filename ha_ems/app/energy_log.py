@@ -103,45 +103,47 @@ class EnergyLogger:
 
     # ── Aggregation ───────────────────────────────────────────────────────────
 
-    def get_history(self, period: str = "day") -> dict:
+    def get_history(self, period: str = "hourly", date: str | None = None) -> dict:
         """
-        Aggregate hourly buckets into bars.
+        Aggregate hourly buckets into bars, anchored on a chosen date.
 
-        period: "today" → today's 24 hourly slots (one bar per hour)
-                "day"   → last 30 days  (one bar per day)
-                "week"  → last 13 weeks (one bar per ISO week)
-                "month" → last 12 months
-                "year"  → last 5 years
+        period: "hourly"  → 24 hourly bars of `date`'s day
+                "daily"   → daily bars of `date`'s month
+                "monthly" → monthly bars of `date`'s year
+        `date` is "YYYY-MM-DD" (defaults to today). Legacy period names
+        (today/day/week/month/year) are mapped for backward compatibility.
         """
+        legacy = {"today": "hourly", "day": "daily", "week": "daily",
+                  "month": "monthly", "year": "monthly"}
+        period = legacy.get(period, period)
+        if period not in ("hourly", "daily", "monthly"):
+            period = "hourly"
+        anchor = date or datetime.now().strftime("%Y-%m-%d")  # YYYY-MM-DD
+
         agg: dict[str, dict] = defaultdict(
             lambda: {"kwh_in": 0.0, "kwh_out": 0.0, "kwh_house": 0.0, "cost": 0.0, "revenue": 0.0}
         )
 
-        today_date = datetime.now().strftime("%Y-%m-%d")
-
         for key, bucket in self._data.items():
             # key: "YYYY-MM-DDTHH"
             date_part = key[:10]  # "YYYY-MM-DD"
-            if period == "today":
-                if date_part != today_date:
+            if period == "hourly":
+                if date_part != anchor:
                     continue
-                agg_key = key[11:13] + ":00"  # "HH:00"
-            elif period == "day":
-                agg_key = date_part
-            elif period == "week":
-                dt = datetime.strptime(date_part, "%Y-%m-%d")
-                iso = dt.isocalendar()
-                agg_key = f"{iso[0]}-W{iso[1]:02d}"
-            elif period == "month":
-                agg_key = key[:7]  # "YYYY-MM"
-            else:  # year
-                agg_key = key[:4]  # "YYYY"
+                agg_key = key[11:13] + ":00"   # "HH:00"
+            elif period == "daily":
+                if date_part[:7] != anchor[:7]:  # same month
+                    continue
+                agg_key = date_part              # "YYYY-MM-DD"
+            else:  # monthly
+                if date_part[:4] != anchor[:4]:  # same year
+                    continue
+                agg_key = key[:7]                # "YYYY-MM"
 
             for k in ("kwh_in", "kwh_out", "kwh_house", "cost", "revenue"):
                 agg[agg_key][k] += bucket.get(k, 0.0)
 
-        limits = {"today": 24, "day": 30, "week": 13, "month": 12, "year": 5}
-        sorted_keys = sorted(agg)[-limits.get(period, 30):]
+        sorted_keys = sorted(agg)
 
         items = []
         for k in sorted_keys:
@@ -167,4 +169,4 @@ class EnergyLogger:
         }
         totals["net_cost"] = round(totals["cost"] - totals["revenue"], 4)
 
-        return {"period": period, "items": items, "totals": totals}
+        return {"period": period, "date": anchor, "items": items, "totals": totals}

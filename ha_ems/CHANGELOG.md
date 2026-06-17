@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.31
+
+### Changed
+- **Filtre d'historique global** (page Energy) : un seul contrôle
+  Heure / Jour / Année + sélecteur de date (avec navigation ‹ ›) pilote
+  maintenant les deux graphes Consommation et Coût, au lieu d'un réglage séparé
+  par graphe.
+  - **Heure** : 24 barres horaires du jour choisi
+  - **Jour** : barres journalières du mois choisi
+  - **Année** : barres mensuelles de l'année choisie
+- L'API `/api/energy/history` accepte un paramètre `date` qui ancre
+  l'agrégation sur la période demandée.
+
 ## 0.5.30
 
 ### Changed

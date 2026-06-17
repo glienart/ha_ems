@@ -381,10 +381,8 @@ async def api_epex():
 
 
 @app.get("/api/energy/history")
-async def api_energy_history(period: str = "day"):
-    if period not in ("today", "day", "week", "month", "year"):
-        period = "day"
-    return JSONResponse(_energy_logger.get_history(period))
+async def api_energy_history(period: str = "hourly", date: str = ""):
+    return JSONResponse(_energy_logger.get_history(period, date or None))
 
 
 @app.get("/api/forecast")
@@ -690,6 +688,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .day-toggle{display:flex;gap:.4rem}
   .day-btn{padding:.2rem .6rem;border-radius:.4rem;border:1px solid var(--border);background:none;color:var(--muted);cursor:pointer;font-size:.75rem}
   .day-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  .hist-controls{display:flex;justify-content:space-between;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:.75rem}
+  .hist-nav{display:flex;align-items:center;gap:.4rem}
+  .hist-date{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:.3rem .5rem;border-radius:.4rem;font-size:.8rem}
   .chart-wrap{position:relative;height:160px;margin-bottom:.5rem}
   .price-table{width:100%;border-collapse:collapse;font-size:.75rem}
   .price-table th{color:var(--muted);font-size:.62rem;text-transform:uppercase;padding:.25rem .4rem;border-bottom:1px solid var(--border);text-align:left;position:sticky;top:0;background:var(--card)}
@@ -932,28 +933,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="section-title" style="margin-top:.75rem">Consommation &amp; Co&ucirc;t</div>
   <div class="dual-grid">
     <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
-        <span class="card-label">Consommation (kWh)</span>
-        <div class="day-toggle">
-          <button class="day-btn active" onclick="setKwhPeriod('today',this)">Heure</button>
-          <button class="day-btn" onclick="setKwhPeriod('day',this)">Jour</button>
-          <button class="day-btn" onclick="setKwhPeriod('month',this)">Mois</button>
-        </div>
-      </div>
+      <div class="card-label" style="margin-bottom:.5rem">Consommation (kWh)</div>
       <div class="chart-wrap" style="height:320px"><canvas id="kwhChart"></canvas></div>
       <div class="updated" id="kwh-updated"></div>
     </div>
     <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
-        <span class="card-label">Prix pay&eacute; (&euro;)</span>
-        <div class="day-toggle">
-          <button class="day-btn active" onclick="setPricePeriod('today',this)">Heure</button>
-          <button class="day-btn" onclick="setPricePeriod('day',this)">Jour</button>
-          <button class="day-btn" onclick="setPricePeriod('month',this)">Mois</button>
-        </div>
-      </div>
+      <div class="card-label" style="margin-bottom:.5rem">Prix pay&eacute; (&euro;)</div>
       <div class="chart-wrap" style="height:320px"><canvas id="priceChart"></canvas></div>
       <div class="updated" id="price-updated"></div>
+    </div>
+  </div>
+  <!-- Global history filter — drives both charts above -->
+  <div class="hist-controls">
+    <div class="day-toggle">
+      <button class="day-btn active" data-period="hourly"  onclick="setHistPeriod('hourly',this)">Heure</button>
+      <button class="day-btn"        data-period="daily"   onclick="setHistPeriod('daily',this)">Jour</button>
+      <button class="day-btn"        data-period="monthly" onclick="setHistPeriod('monthly',this)">Année</button>
+    </div>
+    <div class="hist-nav">
+      <button class="day-btn" onclick="stepHist(-1)" title="Précédent">&#8249;</button>
+      <input type="date" id="histDate" class="hist-date" onchange="loadEnergyHistory()">
+      <button class="day-btn" onclick="stepHist(1)" title="Suivant">&#8250;</button>
     </div>
   </div>
   <div class="updated" id="updated"></div>
@@ -1064,7 +1064,7 @@ function showPage(name) {
   // Keep the page in the URL hash so a refresh lands on the same tab.
   if (location.hash !== "#" + name) location.hash = name;
   if (name === "settings") loadSettings();
-  if (name === "energy") { loadPowerChart(); loadKwhHistory(); loadPriceHistory(); }
+  if (name === "energy") { loadPowerChart(); loadEnergyHistory(); }
   if (name === "analyse") { if (!_epexData) loadEpex(); loadForecast(); }
 }
 window.addEventListener("hashchange", () => showPage((location.hash || "").replace("#", "")));
@@ -1730,20 +1730,32 @@ function renderPowerChart(series) {
 
 setInterval(loadPowerChart, 10 * 60 * 1000);
 
-// ── kWh Consumption ──
-let _kwhPeriod = 'today', _kwhChartInst = null;
-async function loadKwhHistory() {
+// ── Energy history (Consommation & Coût): ONE global period + date for both charts ──
+let _histPeriod = 'hourly', _histDate = '', _kwhChartInst = null, _priceChartInst = null;
+function _isoDate(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+async function loadEnergyHistory() {
+  const inp = document.getElementById('histDate');
+  if (inp) { if (!inp.value) inp.value = _histDate || _isoDate(new Date()); _histDate = inp.value; }
+  else if (!_histDate) { _histDate = _isoDate(new Date()); }
   try {
-    const data = await fetch(BASE+'/api/energy/history?period='+_kwhPeriod).then(r=>r.json());
-    renderKwhChart(data);
+    const data = await fetch(BASE+'/api/energy/history?period='+_histPeriod+'&date='+_histDate).then(r=>r.json());
+    renderKwhChart(data); renderPriceChart(data);
   } catch(e) { const el=document.getElementById('kwh-updated'); if(el) el.textContent='Erreur'; }
 }
-function setKwhPeriod(period, btn) {
-  _kwhPeriod = period;
-  document.querySelectorAll('#kwhChart').forEach(()=>{});
-  document.querySelectorAll('[onclick^="setKwhPeriod"]').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
-  loadKwhHistory();
+function setHistPeriod(period, btn) {
+  _histPeriod = period;
+  document.querySelectorAll('.hist-controls .day-btn[data-period]').forEach(b=>b.classList.toggle('active', b.dataset.period===period));
+  loadEnergyHistory();
+}
+function stepHist(dir) {
+  const inp = document.getElementById('histDate');
+  const base = (inp && inp.value) ? new Date(inp.value+'T00:00:00') : new Date();
+  if (_histPeriod === 'hourly')      base.setDate(base.getDate()+dir);
+  else if (_histPeriod === 'daily')  base.setMonth(base.getMonth()+dir);
+  else                               base.setFullYear(base.getFullYear()+dir);
+  _histDate = _isoDate(base);
+  if (inp) inp.value = _histDate;
+  loadEnergyHistory();
 }
 function renderKwhChart(data) {
   if (!data || !data.items) return;
@@ -1784,20 +1796,7 @@ function renderKwhChart(data) {
   if (el) { const t=data.totals; el.textContent=data.items.length+' barres · '+(t.kwh_house>0?'conso '+t.kwh_house.toFixed(2)+' kWh':'import '+t.kwh_in.toFixed(2)+' kWh'); }
 }
 
-// ── Prix payé ──
-let _pricePeriod = 'today', _priceChartInst = null;
-async function loadPriceHistory() {
-  try {
-    const data = await fetch(BASE+'/api/energy/history?period='+_pricePeriod).then(r=>r.json());
-    renderPriceChart(data);
-  } catch(e) { const el=document.getElementById('price-updated'); if(el) el.textContent='Erreur'; }
-}
-function setPricePeriod(period, btn) {
-  _pricePeriod = period;
-  document.querySelectorAll('[onclick^="setPricePeriod"]').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
-  loadPriceHistory();
-}
+// ── Prix payé (rendered together with the kWh chart by loadEnergyHistory) ──
 function renderPriceChart(data) {
   if (!data || !data.items) return;
   const labels   = data.items.map(i=>i.label);
@@ -1825,7 +1824,7 @@ function renderPriceChart(data) {
   const el = document.getElementById('price-updated');
   if (el) { const net=data.totals.net_cost; el.textContent=data.items.length+' barres · net '+(net>=0?'':'-')+Math.abs(net).toFixed(2)+' €'; }
 }
-setInterval(()=>{ if(document.getElementById('page-energy').classList.contains('active')){ loadKwhHistory(); loadPriceHistory(); } }, 60000);
+setInterval(()=>{ if(document.getElementById('page-energy').classList.contains('active')) loadEnergyHistory(); }, 60000);
 
 // Initial route from the URL hash (so a refresh restores the current tab).
 showPage((location.hash || "").replace("#", "") || "energy");
