@@ -10,7 +10,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import FastAPI
@@ -36,8 +36,14 @@ _loop_task: Optional[asyncio.Task] = None
 _epex_data: dict = {}
 _epex_task: Optional[asyncio.Task] = None
 _solar_forecast: dict = {}
+_solar_fetched_at: Optional[datetime] = None
 _schedule: list = []
 _schedule_built_at: Optional[str] = None
+
+# Forecast.Solar free tier is heavily rate-limited (~12 calls/day), so we cache
+# the forecast and only refresh it every few hours instead of on every schedule
+# rebuild (which runs every 30 min).
+SOLAR_REFRESH_INTERVAL = timedelta(hours=6)
 _consumption_history: ConsumptionHistory = ConsumptionHistory()
 _energy_logger: EnergyLogger = EnergyLogger()
 _schedule_task: Optional[asyncio.Task] = None
@@ -104,15 +110,25 @@ async def epex_loop():
 
 async def rebuild_schedule() -> None:
     """Rebuild the 24h battery schedule from forecasts + EPEX prices."""
-    global _solar_forecast, _schedule, _schedule_built_at
+    global _solar_forecast, _solar_fetched_at, _schedule, _schedule_built_at
     s = _settings
     if s.panel_kwp > 0:
-        try:
-            _solar_forecast = await fetch_solar_forecast(
-                s.latitude, s.longitude, s.panel_tilt, s.panel_azimuth, s.panel_kwp
-            )
-        except Exception as exc:
-            _LOGGER.error("Solar forecast error: %s", exc)
+        now = datetime.now()
+        stale = (
+            _solar_fetched_at is None
+            or not _solar_forecast
+            or (now - _solar_fetched_at) >= SOLAR_REFRESH_INTERVAL
+        )
+        if stale:
+            try:
+                fc = await fetch_solar_forecast(
+                    s.latitude, s.longitude, s.panel_tilt, s.panel_azimuth, s.panel_kwp
+                )
+                if fc:  # keep the previous forecast on empty/error (e.g. 429)
+                    _solar_forecast = fc
+                    _solar_fetched_at = now
+            except Exception as exc:
+                _LOGGER.error("Solar forecast error: %s", exc)
     if not _epex_data:
         _LOGGER.debug("No EPEX data — skipping schedule build")
         return
@@ -474,7 +490,7 @@ class SettingsUpdate(BaseModel):
 
 @app.post("/api/settings")
 async def api_update_settings(body: SettingsUpdate):
-    global _settings, _loop_task
+    global _settings, _loop_task, _solar_fetched_at
     data = body.model_dump(exclude_none=True)
     if "evs" in data:
         _settings.evs = data.pop("evs")
@@ -486,6 +502,7 @@ async def api_update_settings(body: SettingsUpdate):
         _loop_task.cancel()
         _loop_task = asyncio.create_task(ems_loop())
     if any(k in data for k in ("panel_kwp","latitude","longitude","panel_tilt","panel_azimuth","battery_capacity_kwh")):
+        _solar_fetched_at = None  # invalidate cache so the rebuild refetches solar
         asyncio.create_task(rebuild_schedule())
     await run_optimizer()
     return JSONResponse({"ok": True})
