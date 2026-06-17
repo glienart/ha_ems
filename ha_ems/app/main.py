@@ -650,9 +650,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .price-table tr.cur td{background:#d1fae5;color:#065f46;font-weight:700}
   @media(prefers-color-scheme:dark){.price-table tr.cur td{background:#064e3b;color:#10b981}}
   .pbar{height:5px;border-radius:2px;margin-top:2px}
-  .energy-layout{display:grid;grid-template-columns:1fr 210px;gap:.75rem}
+  .energy-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,300px);gap:.75rem}
+  .energy-layout > *{min-width:0;overflow:hidden}
   @media(max-width:700px){.energy-layout{grid-template-columns:1fr}}
-  .flow-chart-grid{display:grid;grid-template-columns:300px 1fr;gap:.75rem;margin-bottom:.75rem;align-items:start}
+  .flow-chart-grid{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);gap:.75rem;margin-bottom:.75rem;align-items:start}
+  .flow-chart-grid > *{min-width:0;overflow:hidden}
   @media(max-width:720px){.flow-chart-grid{grid-template-columns:1fr}}
   .ev-fields-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.4rem}
   @media(max-width:600px){.ev-fields-grid{grid-template-columns:repeat(2,1fr)}}
@@ -879,23 +881,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <span class="ha-e-label">Battery</span>
         </div>
         <svg class="ha-e-lines" viewBox="0 0 100 100" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-          <path id="epl-solar"    class="ha-e-path"    d="M50,10 C50,35 90,35 90,50"/>
-          <path id="epl-return"   class="ha-e-path"   d="M50,10 C50,35 10,35 10,50"/>
-          <path id="epl-grid"     class="ha-e-path"     d="M10,50 H90"/>
-          <path id="epl-bat-home" class="ha-e-path" d="M50,90 C50,65 90,65 90,50"/>
-          <path id="epl-bat-grid" class="ha-e-path" d="M50,90 C50,65 10,65 10,50"/>
-          <circle r="1.8" class="d-solar"    id="edot-solar"    style="display:none"><animateMotion dur="2.8s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-solar"/></animateMotion></circle>
-          <circle r="1.8" class="d-return"   id="edot-return"   style="display:none"><animateMotion dur="3.2s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-return"/></animateMotion></circle>
-          <circle r="1.8" class="d-grid"     id="edot-grid"     style="display:none"><animateMotion dur="4s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-grid"/></animateMotion></circle>
-          <circle r="1.8" class="d-bat-home" id="edot-bat-home" style="display:none"><animateMotion dur="3.5s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-home"/></animateMotion></circle>
-          <circle r="1.8" class="d-bat-grid" id="edot-bat-grid" style="display:none"><animateMotion dur="4s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-grid"/></animateMotion></circle>
+          <path id="epl-solar"      class="ha-e-path" d="M50,10 C50,35 90,35 90,50"/>
+          <path id="epl-return"     class="ha-e-path" d="M50,10 C50,35 10,35 10,50"/>
+          <path id="epl-grid"       class="ha-e-path" d="M10,50 H90"/>
+          <path id="epl-bat-home"   class="ha-e-path" d="M50,90 C50,65 90,65 90,50"/>
+          <path id="epl-bat-grid"   class="ha-e-path" d="M50,90 C50,65 10,65 10,50"/>
+          <path id="epl-solar-bat"  class="ha-e-path" d="M50,10 C50,35 50,65 50,90"/>
+          <path id="epl-grid-bat"   class="ha-e-path" d="M10,50 C10,65 50,65 50,90"/>
+          <circle r="1.8" class="d-solar"     id="edot-solar"     style="display:none"><animateMotion dur="2.8s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-solar"/></animateMotion></circle>
+          <circle r="1.8" class="d-return"    id="edot-return"    style="display:none"><animateMotion dur="3.2s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-return"/></animateMotion></circle>
+          <circle r="1.8" class="d-grid"      id="edot-grid"      style="display:none"><animateMotion dur="4s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-grid"/></animateMotion></circle>
+          <circle r="1.8" class="d-bat-home"  id="edot-bat-home"  style="display:none"><animateMotion dur="3.5s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-home"/></animateMotion></circle>
+          <circle r="1.8" class="d-bat-grid"  id="edot-bat-grid"  style="display:none"><animateMotion dur="4s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-bat-grid"/></animateMotion></circle>
+          <circle r="1.8" class="d-solar"     id="edot-solar-bat" style="display:none"><animateMotion dur="3s"   repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-solar-bat"/></animateMotion></circle>
+          <circle r="1.8" class="d-grid"      id="edot-grid-bat"  style="display:none"><animateMotion dur="3.5s" repeatCount="indefinite" calcMode="linear"><mpath xlink:href="#epl-grid-bat"/></animateMotion></circle>
         </svg>
       </div>
     </div>
     <div class="card">
       <div class="card-label" style="margin-bottom:.5rem">Power sources</div>
-      <div style="position:relative;height:340px">
-        <canvas id="power-chart"></canvas>
+      <div style="position:relative;height:340px;width:100%;overflow:hidden">
+        <canvas id="power-chart" style="width:100%!important"></canvas>
       </div>
     </div>
   </div>
@@ -1050,6 +1056,8 @@ function updateFlow(d) {
   setFlow('epl-grid',     'edot-grid',     grid >  50,                   '#488fc2');
   setFlow('epl-bat-home', 'edot-bat-home', batDischarging,               '#4db6ac');
   setFlow('epl-bat-grid', 'edot-bat-grid', batDischarging && grid < -50, '#4db6ac');
+  setFlow('epl-solar-bat', 'edot-solar-bat', batCharging,                '#ff9800');
+  setFlow('epl-grid-bat',  'edot-grid-bat',  batCharging && grid > 50,   '#488fc2');
 }
 
 document.querySelectorAll(".mode-btn").forEach(btn => {
