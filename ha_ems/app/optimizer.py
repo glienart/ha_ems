@@ -1,5 +1,5 @@
 """
-HA EMS -- Decision engine (v0.5.27).
+HA EMS -- Decision engine (v0.5.28).
 
 Three optimizer improvements:
   1. Hysteresis: avoid oscillating near cheap/expensive thresholds by requiring

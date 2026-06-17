@@ -22,7 +22,7 @@ from .energy_html import ENERGY_HTML
 from .energy_log import EnergyLogger
 from .epex import fetch_prices, resolve_zone
 from .optimizer import EmsOptimizer, EmsSnapshot, EvSnapshot
-from .forecast import fetch_solar_forecast, ConsumptionHistory
+from .forecast import fetch_solar_forecast, ConsumptionHistory, SolarCalibration
 from .scheduler import build_schedule, current_scheduled_action
 from .settings import EmsSettings
 
@@ -45,6 +45,7 @@ _schedule_built_at: Optional[str] = None
 # rebuild (which runs every 30 min).
 SOLAR_REFRESH_INTERVAL = timedelta(hours=6)
 _consumption_history: ConsumptionHistory = ConsumptionHistory()
+_solar_calib: SolarCalibration = SolarCalibration()
 _energy_logger: EnergyLogger = EnergyLogger()
 _schedule_task: Optional[asyncio.Task] = None
 
@@ -71,6 +72,7 @@ async def lifespan(app: FastAPI):
     # Flush state to disk so nothing is lost on shutdown/restart
     try:
         _consumption_history.save()
+        _solar_calib.save()
         _energy_logger.flush()
     except Exception as exc:
         _LOGGER.error("Shutdown flush error: %s", exc)
@@ -138,10 +140,12 @@ async def rebuild_schedule() -> None:
     buy_prices  = [{**p, "price_eur_kwh": p["price_eur_kwh"]*s.tariff_a_consumption+s.tariff_b_consumption} for p in all_epex]
     sell_prices = [{**p, "price_eur_kwh": p["price_eur_kwh"]*s.tariff_a_injection+s.tariff_b_injection} for p in all_epex]
     bat_soc = await ha_client.get_float(s.battery_soc_sensor, default=50.0) or 50.0
+    # Keep _solar_forecast raw (for learning); feed the house-calibrated copy to the planner.
+    calibrated_solar = _solar_calib.apply(_solar_forecast) if _solar_forecast else {}
     try:
         _schedule = build_schedule(
             now=datetime.now(),
-            solar_forecast=_solar_forecast,
+            solar_forecast=calibrated_solar,
             consumption_forecast=_consumption_history.forecast_next_24h(datetime.now()),
             epex_buy_prices=buy_prices,
             epex_sell_prices=sell_prices,
@@ -166,6 +170,7 @@ async def schedule_loop():
         try:
             await rebuild_schedule()
             _consumption_history.save()  # persist rolling history each cycle
+            _solar_calib.save()          # persist learned solar correction factors
             _energy_logger.flush()       # ensure energy log is on disk
         except asyncio.CancelledError:
             break
@@ -250,6 +255,12 @@ async def run_optimizer():
     _energy_logger.record(grid_w, effective_consumption, effective_injection, _settings.update_interval, house_w=_eff_house)
     if _eff_house is not None and _eff_house > 0:
         _consumption_history.record(datetime.now(), _eff_house)
+
+    # Solar self-calibration: learn how this house's real PV compares to the
+    # generic Forecast.Solar prediction for the current hour.
+    if s.panel_kwp > 0 and s.solar_power_sensor:
+        _now = datetime.now()
+        _solar_calib.observe(_now, solar_w, _solar_forecast.get(_now.strftime("%Y-%m-%dT%H:00")))
 
     # Get scheduled action for this hour from 24h plan
     _sched_slot = current_scheduled_action(_schedule, datetime.now())
@@ -395,6 +406,10 @@ async def api_forecast():
         "built_at": _schedule_built_at,
         "has_solar_forecast": bool(_solar_forecast),
         "has_history": _consumption_history.has_enough_data,
+        "solar_calibration": {
+            "mean_factor": _solar_calib.mean_factor,
+            "hours_learned": _solar_calib.hours_learned,
+        },
     })
 
 
@@ -981,6 +996,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- 24h forecast chart (solar + consumption) -->
+  <div class="section-title" style="margin-top:.75rem">Pr&eacute;visions 24h <span id="fc-calib" style="font-size:.7rem;font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0"></span></div>
+  <div class="card">
+    <div class="chart-wrap" style="height:200px"><canvas id="forecastChart"></canvas></div>
+  </div>
+
   <!-- 24h optimized battery plan (from /api/forecast) -->
   <div class="section-title" style="margin-top:.75rem">Plan batterie 24h <span id="plan-status" style="font-size:.7rem;font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0"></span></div>
   <div class="card">
@@ -1494,6 +1515,7 @@ setInterval(loadEpex, 15*60*1000);
 
 // ── 24h optimized battery plan (/api/forecast) ──
 const PLAN_MAP = {charge:{cls:"green",label:"Charge"},discharge:{cls:"yellow",label:"Décharge"},idle:{cls:"gray",label:"Repos"}};
+let _forecastChartInst = null;
 async function loadForecast() {
   try { renderForecast(await fetch(BASE+'/api/forecast').then(r=>r.json())); }
   catch(e) { console.error('Forecast:', e); }
@@ -1530,6 +1552,35 @@ function renderForecast(d) {
     bits.push(d.has_solar_forecast ? '☀ prévision solaire' : 'sans prévision solaire');
     bits.push(d.has_history ? 'historique conso OK' : 'conso par défaut');
     status.textContent = '· ' + bits.join(' · ');
+  }
+  // Solar/consumption forecast chart
+  const fcCtx = document.getElementById('forecastChart');
+  if (fcCtx && typeof Chart !== 'undefined') {
+    const flabels = sched.map(s=>s.hour_label);
+    const fsolar  = sched.map(s=>+((s.solar_w||0)/1000).toFixed(3));
+    const fconso  = sched.map(s=>+((s.consumption_w||0)/1000).toFixed(3));
+    if (_forecastChartInst) _forecastChartInst.destroy();
+    _forecastChartInst = new Chart(fcCtx.getContext('2d'), {
+      type:'line',
+      data:{labels:flabels,datasets:[
+        {label:'Solaire prévu (kW)', data:fsolar, borderColor:'rgb(255,152,0)', backgroundColor:'rgba(255,152,0,0.15)', fill:true,  tension:0.4, pointRadius:0, borderWidth:1.5},
+        {label:'Conso prévue (kW)',  data:fconso, borderColor:'rgb(120,120,120)', backgroundColor:'rgba(120,120,120,0.08)', fill:false, tension:0.4, pointRadius:0, borderWidth:1.5, borderDash:[5,3]},
+      ]},
+      options:{
+        responsive:true, maintainAspectRatio:false, animation:{duration:400},
+        plugins:{ legend:{labels:{color:'#9ca3af',font:{size:10},boxWidth:10,usePointStyle:true}},
+                  tooltip:{mode:'index',intersect:false,callbacks:{label:c=>` ${c.dataset.label}: ${c.parsed.y.toFixed(2)} kW`}} },
+        scales:{ x:{ticks:{color:'#6b7280',maxTicksLimit:12,font:{size:9}},grid:{display:false}},
+                 y:{beginAtZero:true,ticks:{color:'#6b7280',font:{size:9},callback:v=>v+' kW'},grid:{color:'rgba(128,128,128,0.1)'}} }
+      }
+    });
+  }
+  const fcCalib = document.getElementById('fc-calib');
+  if (fcCalib) {
+    const c = d.solar_calibration;
+    fcCalib.textContent = (c && c.hours_learned > 0)
+      ? '· calibration maison ×' + c.mean_factor + ' (' + c.hours_learned + ' h apprises)'
+      : '· calibration solaire en apprentissage…';
   }
   const cur = body.querySelector('tr.cur');
   if (cur) setTimeout(function(){ cur.scrollIntoView({block:'nearest'}); }, 100);

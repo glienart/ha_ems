@@ -1,5 +1,5 @@
 """
-24h battery schedule optimizer for HA EMS v0.5.27.
+24h battery schedule optimizer for HA EMS v0.5.28.
 
 Given solar / consumption forecasts and EPEX day-ahead prices,
 produces a per-hour battery action plan that minimises grid cost.

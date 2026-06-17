@@ -1,5 +1,5 @@
 """
-Solar production forecast and consumption history for HA EMS v0.5.27.
+Solar production forecast, consumption history and solar self-calibration for HA EMS v0.5.28.
 
 Solar forecast: Forecast.Solar API (free, no API key required).
   GET https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}
@@ -19,6 +19,11 @@ from datetime import datetime, timedelta
 _LOGGER = logging.getLogger(__name__)
 FORECAST_SOLAR_BASE = "https://api.forecast.solar/estimate"
 CONSUMPTION_PATH = "/data/consumption_history.json"
+SOLAR_CALIB_PATH = "/data/solar_calibration.json"
+CALIB_ALPHA = 0.15      # EMA learning rate (slow, robust to noisy days)
+CALIB_MIN_FC_W = 100    # ignore hours where the forecast is essentially night
+CALIB_MIN_RATIO = 0.2   # clamp the per-hour correction to a sane band
+CALIB_MAX_RATIO = 3.0
 
 
 async def fetch_solar_forecast(
@@ -134,3 +139,90 @@ class ConsumptionHistory:
     def has_enough_data(self) -> bool:
         """True once we have at least ~100 readings (roughly 1–2 h of data)."""
         return sum(len(v) for v in self._data.values()) > 100
+
+
+class SolarCalibration:
+    """Learns a per-hour-of-day correction factor between the generic
+    Forecast.Solar prediction and *this house's* actual PV production.
+
+    Every clock hour, the average measured PV power is compared to the
+    forecast for that hour; the (clamped) ratio updates an exponential moving
+    average. Future forecasts are multiplied by these factors so the prediction
+    gradually adapts to local shading, soiling and orientation errors.
+    """
+
+    def __init__(self, path: str = SOLAR_CALIB_PATH, alpha: float = CALIB_ALPHA):
+        self._path = path
+        self._alpha = alpha
+        self._factors: dict[int, float] = {}        # hour_of_day -> factor
+        self._cur = {"hour": None, "sum": 0.0, "n": 0, "fc": 0.0}
+        self._load()
+
+    def _load(self) -> None:
+        if not self._path or not os.path.exists(self._path):
+            return
+        try:
+            with open(self._path) as f:
+                raw = json.load(f)
+            self._factors = {int(k): float(v) for k, v in raw.get("factors", {}).items()}
+            _LOGGER.info("Solar calibration loaded: %d learned hours", len(self._factors))
+        except Exception as exc:
+            _LOGGER.error("Failed to load solar calibration: %s", exc)
+
+    def save(self) -> None:
+        if not self._path:
+            return
+        try:
+            with open(self._path, "w") as f:
+                json.dump({"factors": {str(k): v for k, v in self._factors.items()}}, f)
+        except Exception as exc:
+            _LOGGER.error("Failed to save solar calibration: %s", exc)
+
+    def factor(self, hour: int) -> float:
+        return self._factors.get(hour, 1.0)
+
+    def observe(self, now: datetime, actual_w, forecast_w) -> None:
+        """Feed one measurement; measurements are rolled up per clock hour."""
+        if actual_w is None:
+            return
+        hour = now.hour
+        if self._cur["hour"] is None:
+            self._cur = {"hour": hour, "sum": 0.0, "n": 0, "fc": forecast_w or 0.0}
+        elif self._cur["hour"] != hour:
+            self._finalize()
+            self._cur = {"hour": hour, "sum": 0.0, "n": 0, "fc": forecast_w or 0.0}
+        self._cur["sum"] += max(0.0, actual_w)
+        self._cur["n"] += 1
+        if forecast_w:
+            self._cur["fc"] = forecast_w
+
+    def _finalize(self) -> None:
+        c = self._cur
+        if c["n"] <= 0 or c["fc"] < CALIB_MIN_FC_W:
+            return
+        avg = c["sum"] / c["n"]
+        ratio = max(CALIB_MIN_RATIO, min(CALIB_MAX_RATIO, avg / c["fc"]))
+        old = self._factors.get(c["hour"], 1.0)
+        self._factors[c["hour"]] = round((1 - self._alpha) * old + self._alpha * ratio, 4)
+
+    def apply(self, forecast_dict: dict) -> dict:
+        """Return a calibrated copy of {hour_key: watts}."""
+        out = {}
+        for key, w in forecast_dict.items():
+            try:
+                hour = int(key[11:13])
+            except (ValueError, IndexError):
+                hour = None
+            f = self._factors.get(hour, 1.0) if hour is not None else 1.0
+            out[key] = round(w * f, 1)
+        return out
+
+    @property
+    def hours_learned(self) -> int:
+        return len(self._factors)
+
+    @property
+    def mean_factor(self) -> float:
+        if not self._factors:
+            return 1.0
+        return round(sum(self._factors.values()) / len(self._factors), 3)

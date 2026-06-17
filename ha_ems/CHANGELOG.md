@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.28
+
+### Added
+- **Graphe de prévisions 24h** (onglet Analyse) : production solaire prévue +
+  consommation prévue.
+- **Apprentissage solaire** : un facteur de correction par heure est appris en
+  comparant la production réelle à la prévision Forecast.Solar, puis appliqué aux
+  prévisions futures — l'estimation s'adapte progressivement à l'ombrage, à
+  l'orientation et à la salissure propres à l'installation. Persisté dans `/data`,
+  facteur moyen affiché dans l'onglet Analyse.
+
+### Notes
+- La consommation était déjà adaptative (moyenne glissante par heure-de-semaine
+  sur 7 jours, persistée depuis 0.5.25).
+
 ## 0.5.27
 
 ### Changed
