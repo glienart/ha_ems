@@ -220,15 +220,11 @@ async def run_optimizer():
             connected=connected,
         ))
 
-    # Record house consumption for forecast history
-    # Energy balance: solar + grid(signed) + battery(signed) = house
-    # grid_w < 0 = export, bat_power < 0 = charging
-    _eff_house = max(0.0, solar_w + grid_w + (bat_power or 0.0))
+    # Use house sensor directly; no calculation
+    _eff_house = house_w if house_w is not None else None
 
-    # Record grid energy + cost for history; use sensor if available, fallback to energy balance
-    _house_for_log = house_w if house_w is not None else _eff_house
-    _energy_logger.record(grid_w, effective_consumption, effective_injection, _settings.update_interval, house_w=_house_for_log)
-    if _eff_house > 0:
+    _energy_logger.record(grid_w, effective_consumption, effective_injection, _settings.update_interval, house_w=_eff_house)
+    if _eff_house is not None and _eff_house > 0:
         _consumption_history.record(datetime.now(), _eff_house)
 
     # Get scheduled action for this hour from 24h plan
@@ -322,7 +318,7 @@ async def run_optimizer():
         "tariff_injection": round(effective_injection, 4) if effective_injection is not None else None,
         "epex_raw": round(epex_raw, 4) if epex_raw is not None else None,
         "battery_w": round(bat_power) if bat_power is not None else None,
-        "house_w": round(max(0.0, solar_w + grid_w + (bat_power or 0.0))),
+        "house_w": round(house_w) if house_w is not None else None,
         "epex_price": _epex_data.get("current_price") if _epex_data else None,
         "reason": decision.reason,
         "updated_at": datetime.now().isoformat(),
@@ -1020,7 +1016,7 @@ function updateFlow(d) {
   const batDischarging = batW != null ? batW >  50  : batDec === 'discharge';
   const batCharging    = batW != null ? batW < -50  : batDec === 'charge';
 
-  // Use backend-computed house_w (energy balance: solar + grid + bat, all signed)
+  // house_w comes directly from sensor; fallback to energy balance only if sensor not configured
   const homeEst = d.house_w ?? Math.max(0, solar + grid + (batW ?? 0));
 
   const gridDir = grid > 0 ? 'Import' : grid < 0 ? 'Export' : 'Idle';

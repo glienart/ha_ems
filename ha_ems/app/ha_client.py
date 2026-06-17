@@ -40,15 +40,23 @@ async def get_state(entity_id: str) -> Optional[dict]:
     return None
 
 
-async def get_float(entity_id: str, default: float = 0.0) -> float:
-    """Return the numeric state of an entity."""
+async def get_float(entity_id: str, default: float = 0.0, unit_hint: str = "") -> float:
+    """Return the numeric state of an entity.
+
+    Automatically converts kW → W when the sensor's unit_of_measurement is 'kW'
+    and unit_hint is 'W' (or unit_hint is empty, which is the default for power sensors).
+    """
     if not entity_id:
         return default
     data = await get_state(entity_id)
     if data is None:
         return default
     try:
-        return float(data["state"])
+        value = float(data["state"])
+        uom = (data.get("attributes") or {}).get("unit_of_measurement", "")
+        if uom == "kW" and unit_hint != "kW":
+            value *= 1000.0
+        return value
     except (KeyError, ValueError, TypeError):
         return default
 
