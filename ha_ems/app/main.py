@@ -1488,14 +1488,18 @@ function renderPowerChart(series) {
     const pts = bucketed[role];
     if (!pts || !pts.length) return null;
     const c = COLORS[role];
+    // Battery: null means idle (unavailable sensor) → replace with 0 instead of interpolating
+    const data = role === 'battery'
+      ? pts.map(p => ({ x: p.x, y: p.y === null ? 0 : p.y }))
+      : pts;
     return {
       label: LABELS[role],
-      data: pts,
+      data,
       borderColor: c.line,
       backgroundColor: c.fill,
       fill: role !== 'house',
       tension: 0.4,
-      spanGaps: true,
+      spanGaps: role !== 'battery',
       borderWidth: role === 'house' ? 2 : 1.5,
       borderDash: role === 'house' ? [5,3] : [],
       pointRadius: 0,
