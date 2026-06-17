@@ -144,6 +144,27 @@ ENERGY_HTML = r"""<!DOCTYPE html>
       </svg>
     </div>
 
+    <!-- Cost History -->
+    <div class="card" id="cost-card">
+      <div class="card-header">
+        <span class="card-title">Cost History</span>
+        <div class="day-toggle">
+          <button class="day-btn active" onclick="setCostPeriod('day',this)">Day</button>
+          <button class="day-btn" onclick="setCostPeriod('week',this)">Week</button>
+          <button class="day-btn" onclick="setCostPeriod('month',this)">Month</button>
+          <button class="day-btn" onclick="setCostPeriod('year',this)">Year</button>
+        </div>
+      </div>
+      <div class="epex-pills" id="cost-pills">
+        <div class="pill"><div class="pill-label">Imported</div><div class="pill-val purple" id="cp-in">-- kWh</div></div>
+        <div class="pill"><div class="pill-label">Exported</div><div class="pill-val green" id="cp-out">-- kWh</div></div>
+        <div class="pill"><div class="pill-label">Cost</div><div class="pill-val red" id="cp-cost">-- €</div></div>
+        <div class="pill"><div class="pill-label">Net</div><div class="pill-val" id="cp-net">-- €</div></div>
+      </div>
+      <div class="chart-wrap"><canvas id="costChart"></canvas></div>
+      <div class="updated" id="cost-updated"></div>
+    </div>
+
   </div>
 
   <!-- RIGHT -->
@@ -153,7 +174,7 @@ ENERGY_HTML = r"""<!DOCTYPE html>
     <div class="card" style="max-height:420px;overflow-y:auto">
       <div class="card-title" id="schedule-title">Price schedule — Today</div>
       <table class="price-table">
-        <thead><tr><th>Time</th><th>€/kWh</th><th>Bar</th></tr></thead>
+        <thead><tr><th>Time</th><th>€/MWh</th><th>Bar</th></tr></thead>
         <tbody id="schedule-body"></tbody>
       </table>
     </div>
@@ -221,7 +242,7 @@ async function loadAll() {
   render();
 }
 
-function fmt(v, digits=4) { return v != null ? (v*100).toFixed(2)+' ct' : '--'; }
+function fmt(v) { return v != null ? (v*1000).toFixed(1)+' €/MWh' : '--'; }
 function fmtEur(v) { return v != null ? v.toFixed(4)+' €' : '--'; }
 
 // ── Render ──
@@ -294,10 +315,10 @@ function drawEpexChart(slots) {
     options: {
       responsive: true, maintainAspectRatio: false,
       animation: { duration: 600 },
-      plugins: { legend: { display:false }, tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y.toFixed(2)} ct/kWh` }}},
+      plugins: { legend: { display:false }, tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y.toFixed(1)} €/MWh` }}},
       scales: {
         x: { ticks: { color:'#6b7280', maxTicksLimit:12, font:{size:10} }, grid:{ display:false } },
-        y: { ticks: { color:'#6b7280', font:{size:10}, callback: v=>v+' ct' }, grid:{ color:'#1f2937' } }
+        y: { ticks: { color:'#6b7280', font:{size:10}, callback: v=>v+' €/MWh' }, grid:{ color:'#1f2937' } }
       }
     }
   });
@@ -318,7 +339,7 @@ function renderSchedule(slots, day) {
     const t = new Date(s.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     return `<tr class="${isCur?'current':''}">
       <td>${t}</td>
-      <td>${(s.price_eur_kwh*100).toFixed(2)} ct</td>
+      <td>${(s.price_eur_kwh*1000).toFixed(1)} €/MWh</td>
       <td><div class="price-bar" style="width:${Math.max(4,pct)}%;background:${col}"></div></td>
     </tr>`;
   }).join('');
@@ -479,8 +500,8 @@ function renderGauges() {
     const spread = mx && mn ? mx - mn : 0.1;
     drawGauge('g-min', mn ?? 0, 0.3, 'var(--bat)', 'ct');
     drawGauge('g-max', mx ?? 0, 0.3, '#ef4444',    'ct');
-    document.getElementById('g-min-lbl').textContent = mn != null ? (mn*100).toFixed(1)+' ct' : '--';
-    document.getElementById('g-max-lbl').textContent = mx != null ? (mx*100).toFixed(1)+' ct' : '--';
+    document.getElementById('g-min-lbl').textContent = mn != null ? (mn*1000).toFixed(0)+' €/MWh' : '--';
+    document.getElementById('g-max-lbl').textContent = mx != null ? (mx*1000).toFixed(0)+' €/MWh' : '--';
   }
 }
 
@@ -525,9 +546,72 @@ function renderPlan() {
   }
 }
 
+// ── Cost History ──
+let _costPeriod = 'day', _costChartInst = null;
+
+async function loadCostHistory() {
+  try {
+    const data = await fetch(BASE+'/api/energy/history?period='+_costPeriod).then(r=>r.json());
+    renderCostHistory(data);
+  } catch(e) {
+    document.getElementById('cost-updated').textContent = 'Error loading cost data';
+  }
+}
+
+function setCostPeriod(period, btn) {
+  _costPeriod = period;
+  document.querySelectorAll('#cost-card .day-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  loadCostHistory();
+}
+
+function renderCostHistory(data) {
+  if (!data || !data.items) return;
+  const t = data.totals;
+  document.getElementById('cp-in').textContent   = t.kwh_in.toFixed(1) + ' kWh';
+  document.getElementById('cp-out').textContent  = t.kwh_out.toFixed(1) + ' kWh';
+  document.getElementById('cp-cost').textContent = t.cost.toFixed(2) + ' €';
+  const net = t.net_cost;
+  const netEl = document.getElementById('cp-net');
+  netEl.textContent = (net >= 0 ? '' : '-') + Math.abs(net).toFixed(2) + ' €';
+  netEl.className   = 'pill-val ' + (net > 0 ? 'red' : 'green');
+
+  const labels   = data.items.map(i => i.label);
+  const costs    = data.items.map(i => +i.cost.toFixed(4));
+  const revenues = data.items.map(i => +i.revenue.toFixed(4));
+
+  const ctx = document.getElementById('costChart').getContext('2d');
+  if (_costChartInst) _costChartInst.destroy();
+  _costChartInst = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Cost (€)',    data: costs,    backgroundColor: 'rgba(239,68,68,0.75)',  borderRadius: 2 },
+        { label: 'Revenue (€)', data: revenues, backgroundColor: 'rgba(16,185,129,0.75)', borderRadius: 2 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 400 },
+      plugins: {
+        legend: { display: true, labels: { color: '#9ca3af', font: { size: 10 } } },
+        tooltip: { callbacks: { label: c => ` ${c.dataset.label.split(' ')[0]}: ${c.parsed.y.toFixed(3)} €` } }
+      },
+      scales: {
+        x: { ticks: { color: '#6b7280', maxTicksLimit: 12, font: { size: 9 } }, grid: { display: false } },
+        y: { ticks: { color: '#6b7280', font: { size: 9 }, callback: v => v.toFixed(2) + ' €' }, grid: { color: '#1f2937' } }
+      }
+    }
+  });
+  document.getElementById('cost-updated').textContent = 'Period: ' + _costPeriod + ' · ' + data.items.length + ' bars';
+}
+
 // ── Init ──
 loadAll();
+loadCostHistory();
 setInterval(loadAll, 30000);
+setInterval(loadCostHistory, 60000);
 </script>
 </body>
 </html>

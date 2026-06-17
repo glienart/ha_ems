@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from . import ha_client, settings as settings_module
 from .energy_html import ENERGY_HTML
+from .energy_log import EnergyLogger
 from .epex import fetch_prices, resolve_zone
 from .optimizer import EmsOptimizer, EmsSnapshot, EvSnapshot
 from .forecast import fetch_solar_forecast, ConsumptionHistory
@@ -38,6 +39,7 @@ _solar_forecast: dict = {}
 _schedule: list = []
 _schedule_built_at: Optional[str] = None
 _consumption_history: ConsumptionHistory = ConsumptionHistory()
+_energy_logger: EnergyLogger = EnergyLogger()
 _schedule_task: Optional[asyncio.Task] = None
 
 
@@ -218,6 +220,9 @@ async def run_optimizer():
             connected=connected,
         ))
 
+    # Record grid energy + cost for history
+    _energy_logger.record(grid_w, effective_consumption, effective_injection, _settings.update_interval)
+
     # Record house consumption for forecast history
     # Energy balance: solar + grid(signed) + battery(signed) = house
     # grid_w < 0 = export, bat_power < 0 = charging
@@ -332,6 +337,13 @@ async def api_state():
 @app.get("/api/epex")
 async def api_epex():
     return JSONResponse(_epex_data or {"error": "No EPEX data -- check token and zone in settings"})
+
+
+@app.get("/api/energy/history")
+async def api_energy_history(period: str = "day"):
+    if period not in ("day", "week", "month", "year"):
+        period = "day"
+    return JSONResponse(_energy_logger.get_history(period))
 
 
 @app.get("/api/forecast")
@@ -751,10 +763,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="sg-row"><span class="sg-key">Cheap &lt;</span><span id="v_cheap_threshold" class="sg-val">&#8212;</span></div>
         <div class="sg-row"><span class="sg-key">Expensive &gt;</span><span id="v_expensive_threshold" class="sg-val">&#8212;</span></div>
         <div class="sg-row"><span class="sg-key">Update interval</span><span id="v_update_interval" class="sg-val">&#8212;</span></div>
-        <div class="sg-row"><span class="sg-key">Conso a (&#xD7;EPEX)</span><span id="v_tariff_a_consumption" class="sg-val">&#8212;</span></div>
-        <div class="sg-row"><span class="sg-key">Conso b (&#8364;/kWh)</span><span id="v_tariff_b_consumption" class="sg-val">&#8212;</span></div>
-        <div class="sg-row"><span class="sg-key">Inject a (&#xD7;EPEX)</span><span id="v_tariff_a_injection" class="sg-val">&#8212;</span></div>
-        <div class="sg-row"><span class="sg-key">Inject b (&#8364;/kWh)</span><span id="v_tariff_b_injection" class="sg-val">&#8212;</span></div>
+        <div id="v_axb_block" style="display:none">
+          <div class="sg-row"><span class="sg-key">Conso a (&#xD7;EPEX)</span><span id="v_tariff_a_consumption" class="sg-val">&#8212;</span></div>
+          <div class="sg-row"><span class="sg-key">Conso b (&#8364;/kWh)</span><span id="v_tariff_b_consumption" class="sg-val">&#8212;</span></div>
+          <div class="sg-row"><span class="sg-key">Inject a (&#xD7;EPEX)</span><span id="v_tariff_a_injection" class="sg-val">&#8212;</span></div>
+          <div class="sg-row"><span class="sg-key">Inject b (&#8364;/kWh)</span><span id="v_tariff_b_injection" class="sg-val">&#8212;</span></div>
+        </div>
         <div class="sg-row"><span class="sg-key">Hysteresis cheap/exp</span><span id="v_cheap_hysteresis" class="sg-val">&#8212;</span></div>
         <div class="sg-row"><span class="sg-key">Look-ahead slots</span><span id="v_cheap_lookahead_slots" class="sg-val">&#8212;</span></div>
       </div>
@@ -763,11 +777,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="field"><label>Cheap threshold (&#8364;/kWh)</label><input type="number" id="s_cheap_threshold" step="0.01" min="0" max="1"></div>
         <div class="field"><label>Expensive threshold (&#8364;/kWh)</label><input type="number" id="s_expensive_threshold" step="0.01" min="0" max="1"></div>
         <div class="field"><label>Update interval (s)</label><input type="number" id="s_update_interval" min="10" max="3600"></div>
-        <div style="margin:.5rem 0 .25rem;font-size:.8rem;color:var(--muted)">Prix effectif = a x EPEX + b</div>
-        <div class="field"><label>Consommation a (multiplicateur EPEX)</label><input type="number" id="s_tariff_a_consumption" step="0.001" min="0" max="10"></div>
-        <div class="field"><label>Consommation b (fixe, &#8364;/kWh)</label><input type="number" id="s_tariff_b_consumption" step="0.001" min="-1" max="1"></div>
-        <div class="field"><label>Injection a (multiplicateur EPEX)</label><input type="number" id="s_tariff_a_injection" step="0.001" min="0" max="10"></div>
-        <div class="field"><label>Injection b (fixe, &#8364;/kWh)</label><input type="number" id="s_tariff_b_injection" step="0.001" min="-1" max="1"></div>
+        <details id="axb_details" style="margin:.5rem 0">
+          <summary style="font-size:.8rem;color:var(--muted);cursor:pointer">Prix effectif = a × EPEX + b <span style="font-size:.75rem">(optionnel, défaut a=1 b=0)</span></summary>
+          <div style="margin-top:.5rem">
+            <div class="field"><label>Consommation a (multiplicateur EPEX)</label><input type="number" id="s_tariff_a_consumption" step="0.001" min="0" max="10"></div>
+            <div class="field"><label>Consommation b (fixe, &#8364;/kWh)</label><input type="number" id="s_tariff_b_consumption" step="0.001" min="-1" max="1"></div>
+            <div class="field"><label>Injection a (multiplicateur EPEX)</label><input type="number" id="s_tariff_a_injection" step="0.001" min="0" max="10"></div>
+            <div class="field"><label>Injection b (fixe, &#8364;/kWh)</label><input type="number" id="s_tariff_b_injection" step="0.001" min="-1" max="1"></div>
+          </div>
+        </details>
         <div class="field"><label>Hystérésis cheap (&#8364;/kWh)</label><input type="number" id="s_cheap_hysteresis" step="0.001" min="0" max="0.1"></div>
         <div class="field"><label>Hystérésis expensive (&#8364;/kWh)</label><input type="number" id="s_expensive_hysteresis" step="0.001" min="0" max="0.1"></div>
         <div class="field"><label>Look-ahead slots (N meilleurs slots EPEX)</label><input type="number" id="s_cheap_lookahead_slots" min="0" max="24"></div>
@@ -910,7 +928,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="card-label" id="sched-title" style="margin-bottom:.4rem">Schedule &mdash; Today</div>
         <div style="max-height:290px;overflow-y:auto">
           <table class="price-table">
-            <thead><tr><th>Time</th><th>ct/kWh</th><th></th></tr></thead>
+            <thead><tr><th>Time</th><th>€/MWh</th><th></th></tr></thead>
             <tbody id="sched-body"></tbody>
           </table>
         </div>
@@ -1156,6 +1174,13 @@ async function loadSettings() {
   if (hystEl) hystEl.textContent = (settingsRes.cheap_hysteresis??'?')+' / '+(settingsRes.expensive_hysteresis??'?')+' €/kWh';
   const lookaheadEl = document.getElementById("v_cheap_lookahead_slots");
   if (lookaheadEl) lookaheadEl.textContent = (settingsRes.cheap_lookahead_slots??'?')+' slots';
+  // Show Ax+B block only when values differ from defaults (a=1, b=0)
+  const axbNonDefault = (settingsRes.tariff_a_consumption??1)!=1||(settingsRes.tariff_b_consumption??0)!=0
+                      ||(settingsRes.tariff_a_injection??1)!=1  ||(settingsRes.tariff_b_injection??0)!=0;
+  const axbViewBlock = document.getElementById("v_axb_block");
+  if (axbViewBlock) axbViewBlock.style.display = axbNonDefault ? '' : 'none';
+  const axbDetails = document.getElementById("axb_details");
+  if (axbDetails) axbDetails.open = axbNonDefault;
 
 
   // Panel & Forecast settings
@@ -1323,7 +1348,7 @@ async function loadEpex() {
   renderEpex();
 }
 
-function ct(v) { return v != null ? (v*100).toFixed(2)+' ct' : '--'; }
+function ct(v) { return v != null ? (v*1000).toFixed(1)+' €/MWh' : '--'; }
 
 function renderEpex() {
   const d = _epexData;
@@ -1362,7 +1387,7 @@ function drawEpexChart(slots) {
   const mn = Math.min(...slots.map(s=>s.price_eur_kwh));
   const mx = Math.max(...slots.map(s=>s.price_eur_kwh));
   const labels = slots.map(s=>new Date(s.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));
-  const vals   = slots.map(s=>+(s.price_eur_kwh*100).toFixed(3));
+  const vals   = slots.map(s=>+(s.price_eur_kwh*1000).toFixed(2));
   const colors = slots.map(s=>{
     if (new Date(s.start)<=now && now<new Date(s.end)) return 'rgba(245,158,11,.95)';
     const r = mx>mn?(s.price_eur_kwh-mn)/(mx-mn):0.5;
@@ -1375,10 +1400,10 @@ function drawEpexChart(slots) {
     data:{labels,datasets:[{data:vals,backgroundColor:colors,borderRadius:2}]},
     options:{
       responsive:true,maintainAspectRatio:false,animation:{duration:500},
-      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>' '+c.parsed.y.toFixed(2)+' ct/kWh'}}},
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>' '+c.parsed.y.toFixed(1)+' €/MWh'}}},
       scales:{
         x:{ticks:{color:getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()||'#6b7280',maxTicksLimit:10,font:{size:9}},grid:{display:false}},
-        y:{ticks:{color:getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()||'#6b7280',font:{size:9},callback:v=>v+' ct'},grid:{color:getComputedStyle(document.documentElement).getPropertyValue('--border').trim()||'#e5e7eb'}}
+        y:{ticks:{color:getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()||'#6b7280',font:{size:9},callback:v=>v+' €/MWh'},grid:{color:getComputedStyle(document.documentElement).getPropertyValue('--border').trim()||'#e5e7eb'}}
       }
     }
   });
@@ -1395,7 +1420,7 @@ function renderSchedule(slots) {
     const pct=mx>mn?Math.round((s.price_eur_kwh-mn)/(mx-mn)*100):50;
     const col=pct<33?'var(--green)':pct>66?'var(--red)':'var(--yellow)';
     const t=new Date(s.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    return '<tr class="'+(isCur?'cur':'')+'"><td>'+t+'</td><td>'+(s.price_eur_kwh*100).toFixed(2)+'</td><td><div class="pbar" style="width:'+Math.max(4,pct)+'%;background:'+col+'"></div></td></tr>';
+    return '<tr class="'+(isCur?'cur':'')+'"><td>'+t+'</td><td>'+(s.price_eur_kwh*1000).toFixed(1)+'</td><td><div class="pbar" style="width:'+Math.max(4,pct)+'%;background:'+col+'"></div></td></tr>';
   }).join('');
   const cur=tbody.querySelector('tr.cur');
   if(cur) setTimeout(()=>cur.scrollIntoView({block:'nearest',behavior:'smooth'}),100);
