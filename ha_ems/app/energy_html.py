@@ -337,6 +337,7 @@ function buildFlow() {
   const grid_w  = _state?.grid_w  ?? 0;
   const bat_soc = _state?.battery_soc ?? 0;
   const bat_w   = _state?.battery_w ?? 0;  // negative = charging, positive = discharging
+  const house_w  = _state?.house_w  ?? Math.max(0, solar_w + grid_w + bat_w);
 
   const importing   = grid_w  >  50;
   const exporting   = grid_w  < -50;
@@ -348,7 +349,7 @@ function buildFlow() {
     { id:'solar',   x:160, y:25,  r:28, color:'#f59e0b', icon:'☀️', label:'Solar',   sub: solar_w+'W' },
     { id:'grid',    x:55,  y:115, r:26, color:'#7c4dff', icon:'⚡',  label:'Grid',    sub: Math.abs(grid_w)+'W' },
     { id:'battery', x:160, y:175, r:28, color:'#10b981', icon:'🔋', label:'Battery', sub: bat_soc+'%' },
-    { id:'home',    x:265, y:115, r:28, color:'#f59e0b', icon:'🏠', label:'Home',    sub: (_state?.net_power_w ?? 0)+'W' },
+    { id:'home',    x:265, y:115, r:28, color:'#f59e0b', icon:'🏠', label:'Home',    sub: house_w+'W' },
   ];
 
   const edges = [
