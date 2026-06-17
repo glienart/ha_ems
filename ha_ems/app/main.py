@@ -617,6 +617,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .d-solar{fill:#ff9800}.d-return{fill:#ff9800}.d-grid{fill:#488fc2}
   .d-bat-home{fill:#4db6ac}.d-bat-grid{fill:#4db6ac}
   .epex-pills{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;margin-bottom:.75rem}
+  @media(max-width:600px){.epex-pills{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:600px){.epex-pills .pill-val{font-size:.8rem}}
   .pill{background:var(--bg);border:1px solid var(--border);border-radius:.5rem;padding:.4rem .6rem;text-align:center}
   .pill-label{font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
   .pill-val{font-size:.95rem;font-weight:700;margin-top:.1rem}
@@ -632,6 +634,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .pbar{height:5px;border-radius:2px;margin-top:2px}
   .energy-layout{display:grid;grid-template-columns:1fr 210px;gap:.75rem}
   @media(max-width:700px){.energy-layout{grid-template-columns:1fr}}
+  .flow-chart-grid{display:grid;grid-template-columns:300px 1fr;gap:.75rem;margin-bottom:.75rem;align-items:start}
+  @media(max-width:720px){.flow-chart-grid{grid-template-columns:1fr}}
+  .ev-fields-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.4rem}
+  @media(max-width:600px){.ev-fields-grid{grid-template-columns:repeat(2,1fr)}}
   .no-epex{font-size:.82rem;color:var(--muted);text-align:center;padding:1.25rem 0;line-height:1.7}
   .no-epex a{color:var(--accent);text-decoration:none;font-weight:500}
   .no-epex a:hover{text-decoration:underline}
@@ -816,7 +822,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
   <!-- Flow + Chart -->
-  <div style="display:grid;grid-template-columns:300px 1fr;gap:.75rem;margin-bottom:.75rem;align-items:start">
+  <div class="flow-chart-grid">
     <div class="card">
       <div class="card-label" style="margin-bottom:.5rem;text-align:center">Live flow</div>
       <div class="ha-e-wrap" style="height:320px">
@@ -1243,7 +1249,7 @@ function _evEntryHtml(i, ev) {
     +'<div class="field"><label>Name</label><input type="text" id="ev_name_'+i+'" value="'+(ev.name||'')+'"></div>'
     +'<div class="field"><label>Charger switch</label><div class="combo"><input class="combo-input" id="s_ev_charger_'+i+'" placeholder="Search switch..." autocomplete="off"><ul class="combo-list" id="sl_ev_charger_'+i+'"></ul></div></div>'
     +'<div class="field"><label>SOC sensor (%)</label><div class="combo"><input class="combo-input" id="s_ev_soc_'+i+'" placeholder="Search % sensor..." autocomplete="off"><ul class="combo-list" id="sl_ev_soc_'+i+'"></ul></div></div>'
-    +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.4rem">'
+    +'<div class="ev-fields-grid">'
     +'<div class="field"><label>Target SOC (%)</label><input type="number" id="ev_target_soc_'+i+'" value="'+(ev.target_soc!=null?ev.target_soc:80)+'" min="20" max="100"></div>'
     +'<div class="field"><label>Departure</label><input type="time" id="ev_departure_'+i+'" value="'+(ev.departure_time||'07:00')+'"></div>'
     +'<div class="field"><label>Max (W)</label><input type="number" id="ev_max_w_'+i+'" value="'+(ev.max_charge_w!=null?ev.max_charge_w:7400)+'" min="1000" max="22000"></div>'
