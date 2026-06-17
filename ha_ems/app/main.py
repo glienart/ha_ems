@@ -996,12 +996,12 @@ function updateFlow(d) {
   const batDec  = d.battery || 'idle';
   const batW    = d.battery_w;
 
-  const batDischarging = batW != null ? batW < -50 : batDec === 'discharge';
-  const batCharging    = batW != null ? batW >  50  : batDec === 'charge';
+  // battery_w: negative = charging, positive = discharging (Solis convention)
+  const batDischarging = batW != null ? batW >  50  : batDec === 'discharge';
+  const batCharging    = batW != null ? batW < -50  : batDec === 'charge';
 
-  const homeEst = Math.max(0, solar + Math.max(0, grid)
-                  + (batDischarging ? Math.abs(batW ?? 0) : 0)
-                  - (batCharging    ? (batW ?? 0)         : 0));
+  // Use backend-computed house_w (energy balance: solar + grid + bat, all signed)
+  const homeEst = d.house_w ?? Math.max(0, solar + grid + (batW ?? 0));
 
   const gridDir = grid > 0 ? 'Import' : grid < 0 ? 'Export' : 'Idle';
   const batSub  = batW!=null ? (batW>50?'↑ '+batW+' W':batW<-50?'↓ '+Math.abs(batW)+' W':'idle') : batDec;
