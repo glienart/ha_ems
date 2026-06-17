@@ -943,6 +943,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </div>
   </div>
+
+  <!-- kWh + Price history -->
+  <div class="section-title" style="margin-top:.75rem">Consommation &amp; Co&ucirc;t</div>
+  <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:.75rem;margin-bottom:.75rem">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
+        <span class="card-label">Consommation (kWh)</span>
+        <div class="day-toggle">
+          <button class="day-btn active" onclick="setKwhPeriod('today',this)">Heure</button>
+          <button class="day-btn" onclick="setKwhPeriod('day',this)">Jour</button>
+          <button class="day-btn" onclick="setKwhPeriod('month',this)">Mois</button>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="kwhChart"></canvas></div>
+      <div class="updated" id="kwh-updated"></div>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
+        <span class="card-label">Prix pay&eacute; (&euro;)</span>
+        <div class="day-toggle">
+          <button class="day-btn active" onclick="setPricePeriod('today',this)">Heure</button>
+          <button class="day-btn" onclick="setPricePeriod('day',this)">Jour</button>
+          <button class="day-btn" onclick="setPricePeriod('month',this)">Mois</button>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
+      <div class="updated" id="price-updated"></div>
+    </div>
+  </div>
 </div>
 
 <div class="toast" id="toast">Saved!</div>
@@ -972,7 +1001,7 @@ function showPage(name, btn) {
   document.getElementById("page-" + name).classList.add("active");
   btn.classList.add("active");
   if (name === "settings") loadSettings();
-  if (name === "energy" && !_epexData) loadEpex();
+  if (name === "energy") { if (!_epexData) loadEpex(); loadKwhHistory(); loadPriceHistory(); }
 }
 
 function showToast() {
@@ -1562,6 +1591,98 @@ function renderPowerChart(series) {
 
 loadPowerChart();
 setInterval(loadPowerChart, 10 * 60 * 1000);
+
+// ── kWh Consumption ──
+let _kwhPeriod = 'today', _kwhChartInst = null;
+async function loadKwhHistory() {
+  try {
+    const data = await fetch(BASE+'/api/energy/history?period='+_kwhPeriod).then(r=>r.json());
+    renderKwhChart(data);
+  } catch(e) { const el=document.getElementById('kwh-updated'); if(el) el.textContent='Erreur'; }
+}
+function setKwhPeriod(period, btn) {
+  _kwhPeriod = period;
+  document.querySelectorAll('#kwhChart').forEach(()=>{});
+  document.querySelectorAll('[onclick^="setKwhPeriod"]').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  loadKwhHistory();
+}
+function renderKwhChart(data) {
+  if (!data || !data.items) return;
+  const labels   = data.items.map(i=>i.label);
+  const house    = data.items.map(i=>+(i.kwh_house||0).toFixed(3));
+  const imported = data.items.map(i=>+(i.kwh_in||0).toFixed(3));
+  const exported = data.items.map(i=>+(i.kwh_out||0).toFixed(3));
+  const hasHouse = house.some(v=>v>0);
+  const ctx = document.getElementById('kwhChart').getContext('2d');
+  if (_kwhChartInst) _kwhChartInst.destroy();
+  const datasets = hasHouse
+    ? [
+        { label:'Consommation (kWh)', data:house,    backgroundColor:'rgba(245,158,11,0.75)', borderRadius:2 },
+        { label:'Importé (kWh)', data:imported, backgroundColor:'rgba(124,77,255,0.5)',  borderRadius:2 },
+        { label:'Exporté (kWh)', data:exported, backgroundColor:'rgba(16,185,129,0.5)',  borderRadius:2 },
+      ]
+    : [
+        { label:'Importé (kWh)', data:imported, backgroundColor:'rgba(124,77,255,0.75)', borderRadius:2 },
+        { label:'Exporté (kWh)', data:exported, backgroundColor:'rgba(16,185,129,0.75)', borderRadius:2 },
+      ];
+  _kwhChartInst = new Chart(ctx, {
+    type:'bar', data:{labels,datasets},
+    options:{
+      responsive:true, maintainAspectRatio:false, animation:{duration:400},
+      plugins:{ legend:{display:true,labels:{color:'#9ca3af',font:{size:10}}},
+                tooltip:{callbacks:{label:c=>` ${c.parsed.y.toFixed(3)} kWh`}} },
+      scales:{
+        x:{ticks:{color:'#6b7280',maxTicksLimit:12,font:{size:9}},grid:{display:false}},
+        y:{ticks:{color:'#6b7280',font:{size:9},callback:v=>v.toFixed(2)+' kWh'},grid:{color:'rgba(55,65,81,0.5)'}}
+      }
+    }
+  });
+  const el = document.getElementById('kwh-updated');
+  if (el) { const t=data.totals; el.textContent=data.items.length+' barres · '+(t.kwh_house>0?'conso '+t.kwh_house.toFixed(2)+' kWh':'import '+t.kwh_in.toFixed(2)+' kWh'); }
+}
+
+// ── Prix payé ──
+let _pricePeriod = 'today', _priceChartInst = null;
+async function loadPriceHistory() {
+  try {
+    const data = await fetch(BASE+'/api/energy/history?period='+_pricePeriod).then(r=>r.json());
+    renderPriceChart(data);
+  } catch(e) { const el=document.getElementById('price-updated'); if(el) el.textContent='Erreur'; }
+}
+function setPricePeriod(period, btn) {
+  _pricePeriod = period;
+  document.querySelectorAll('[onclick^="setPricePeriod"]').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  loadPriceHistory();
+}
+function renderPriceChart(data) {
+  if (!data || !data.items) return;
+  const labels   = data.items.map(i=>i.label);
+  const costs    = data.items.map(i=>+(i.cost||0).toFixed(4));
+  const revenues = data.items.map(i=>+(i.revenue||0).toFixed(4));
+  const ctx = document.getElementById('priceChart').getContext('2d');
+  if (_priceChartInst) _priceChartInst.destroy();
+  _priceChartInst = new Chart(ctx, {
+    type:'bar',
+    data:{labels,datasets:[
+      {label:'Coût (€)',   data:costs,    backgroundColor:'rgba(239,68,68,0.75)',  borderRadius:2},
+      {label:'Revenu (€)', data:revenues, backgroundColor:'rgba(16,185,129,0.75)', borderRadius:2},
+    ]},
+    options:{
+      responsive:true, maintainAspectRatio:false, animation:{duration:400},
+      plugins:{ legend:{display:true,labels:{color:'#9ca3af',font:{size:10}}},
+                tooltip:{callbacks:{label:c=>` ${c.parsed.y.toFixed(4)} €`}} },
+      scales:{
+        x:{ticks:{color:'#6b7280',maxTicksLimit:12,font:{size:9}},grid:{display:false}},
+        y:{ticks:{color:'#6b7280',font:{size:9},callback:v=>v.toFixed(3)+' €'},grid:{color:'rgba(55,65,81,0.5)'}}
+      }
+    }
+  });
+  const el = document.getElementById('price-updated');
+  if (el) { const net=data.totals.net_cost; el.textContent=data.items.length+' barres · net '+(net>=0?'':'-')+Math.abs(net).toFixed(2)+' €'; }
+}
+setInterval(()=>{ if(document.getElementById('page-energy').classList.contains('active')){ loadKwhHistory(); loadPriceHistory(); } }, 60000);
 </script>
 </body>
 </html>
