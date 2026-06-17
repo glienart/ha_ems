@@ -2,7 +2,7 @@
 
 A Home Assistant add-on that optimizes solar self-consumption, battery cycling, and EV charging using a rule-based engine and real-time EPEX SPOT day-ahead prices. Everything is configured from a built-in ingress dashboard — no YAML required.
 
-![Version](https://img.shields.io/badge/version-0.5.12-blue) ![HA](https://img.shields.io/badge/Home%20Assistant-add--on-41BDF5)
+![Version](https://img.shields.io/badge/version-0.5.14-blue) ![HA](https://img.shields.io/badge/Home%20Assistant-add--on-41BDF5)
 
 ---
 

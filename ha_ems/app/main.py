@@ -588,6 +588,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .combo-list li:hover,.combo-list li.hl{background:var(--border)}
   .cl-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
   .cl-unit{font-size:.64rem;padding:.1rem .3rem;border-radius:.25rem;background:var(--border);color:var(--muted);white-space:nowrap;flex-shrink:0}
+  .cl-sub{font-size:.68rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;margin-top:.1rem}
   .cl-none{color:var(--muted);font-style:italic}
   .field{margin-bottom:.6rem}
   .field label{display:block;font-size:.78rem;color:var(--muted);margin-bottom:.2rem}
@@ -1089,7 +1090,7 @@ function setupCombo(fieldKey, allEntities, currentVal, isSwitch, wantedUnits) {
       matches.map(e => {
         const name = (e.friendly_name && e.friendly_name !== e.entity_id) ? e.friendly_name : e.entity_id;
         const unit = e.unit ? '<span class="cl-unit">'+e.unit+'</span>' : '';
-        return '<li data-id="'+e.entity_id+'" title="'+e.entity_id+'"><span class="cl-name">'+name+'</span>'+unit+'</li>';
+        return '<li data-id="'+e.entity_id+'"><span class="cl-name">'+name+'</span><span class="cl-sub">'+e.entity_id+'</span>'+unit+'</li>';
       }).join('');
     list.style.display = 'block';
   }
