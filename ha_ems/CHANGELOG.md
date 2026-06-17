@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.29
+
+### Changed
+- **Onglets style Home Assistant** : barre d'onglets soulignés (onglet actif en
+  couleur d'accent), cartes aux coins arrondis avec ombre légère pour coller au
+  thème HA.
+- **URL par onglet** : la page active est mémorisée dans l'URL
+  (`#energy` / `#analyse` / `#settings`) — un rafraîchissement reste sur le même
+  onglet, et les boutons précédent/suivant du navigateur fonctionnent.
+- **Graphes Consommation / Coût** agrandis (même hauteur que le graphe de
+  puissance au-dessus).
+
 ## 0.5.28
 
 ### Added

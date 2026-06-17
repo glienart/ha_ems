@@ -595,13 +595,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;padding:1rem}
-  nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem;border-bottom:1px solid var(--border);padding-bottom:.75rem}
-  .nav-btn{padding:.35rem .85rem;border-radius:.5rem;border:1px solid transparent;background:none;color:var(--muted);cursor:pointer;font-size:.85rem}
-  .nav-btn.active{background:var(--card);border-color:var(--border);color:var(--text)}
-  .nav-settings{font-size:1.1rem;padding:.25rem .6rem;border:1px solid var(--border)!important;border-radius:.5rem}
+  nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem;border-bottom:1px solid var(--border)}
+  .tabs{display:flex;gap:.25rem}
+  .nav-btn{padding:.6rem .9rem;margin-bottom:-1px;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer;font-size:.9rem;font-weight:500;border-radius:0}
+  .nav-btn:hover{color:var(--text)}
+  .nav-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
+  .nav-settings{font-size:1.1rem;padding:.3rem .6rem;margin:0;border:1px solid var(--border)!important;border-radius:.5rem}
+  .nav-settings.active{color:var(--accent)}
   .page{display:none}.page.active{display:block}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem;margin-bottom:1rem}
-  .card{background:var(--card);border:1px solid var(--border);border-radius:.75rem;padding:1rem}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1rem;box-shadow:0 1px 3px rgba(0,0,0,.06)}
   .card-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:.25rem}
   .card-value{font-size:1.5rem;font-weight:700}
   .card-sub{font-size:.75rem;color:var(--muted);margin-top:.25rem}
@@ -712,11 +715,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </head>
 <body>
 <nav>
-  <div style="display:flex;gap:.5rem">
-    <button class="nav-btn active" onclick="showPage('energy',this)">Energy</button>
-    <button class="nav-btn" onclick="showPage('analyse',this)">Analyse</button>
+  <div class="tabs">
+    <button class="nav-btn active" data-page="energy" onclick="showPage('energy')">Energy</button>
+    <button class="nav-btn" data-page="analyse" onclick="showPage('analyse')">Analyse</button>
   </div>
-  <button class="nav-btn nav-settings" id="btn-settings" onclick="showPage('settings',this)" title="Settings">&#x270E;</button>
+  <button class="nav-btn nav-settings" data-page="settings" id="btn-settings" onclick="showPage('settings')" title="Settings">&#x270E;</button>
 </nav>
 
 <!-- SETTINGS PAGE -->
@@ -937,7 +940,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <button class="day-btn" onclick="setKwhPeriod('month',this)">Mois</button>
         </div>
       </div>
-      <div class="chart-wrap"><canvas id="kwhChart"></canvas></div>
+      <div class="chart-wrap" style="height:320px"><canvas id="kwhChart"></canvas></div>
       <div class="updated" id="kwh-updated"></div>
     </div>
     <div class="card">
@@ -949,7 +952,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <button class="day-btn" onclick="setPricePeriod('month',this)">Mois</button>
         </div>
       </div>
-      <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
+      <div class="chart-wrap" style="height:320px"><canvas id="priceChart"></canvas></div>
       <div class="updated" id="price-updated"></div>
     </div>
   </div>
@@ -1039,15 +1042,20 @@ const BASE = window.location.pathname.replace(/[\/]+$/, "");
 
 let _epexData = null, _epexChartInst = null, _epexDay = 'today';
 
-function showPage(name, btn) {
+function showPage(name) {
+  const valid = { energy: 1, analyse: 1, settings: 1 };
+  if (!valid[name]) name = "energy";
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
-  document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
-  document.getElementById("page-" + name).classList.add("active");
-  btn.classList.add("active");
+  document.querySelectorAll(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.page === name));
+  const pg = document.getElementById("page-" + name);
+  if (pg) pg.classList.add("active");
+  // Keep the page in the URL hash so a refresh lands on the same tab.
+  if (location.hash !== "#" + name) location.hash = name;
   if (name === "settings") loadSettings();
   if (name === "energy") { loadPowerChart(); loadKwhHistory(); loadPriceHistory(); }
   if (name === "analyse") { if (!_epexData) loadEpex(); loadForecast(); }
 }
+window.addEventListener("hashchange", () => showPage((location.hash || "").replace("#", "")));
 
 function showToast() {
   const t = document.getElementById("toast");
@@ -1708,9 +1716,6 @@ function renderPowerChart(series) {
   });
 }
 
-loadPowerChart();
-loadKwhHistory();   // Energy is the default tab, so load its history charts on init
-loadPriceHistory();
 setInterval(loadPowerChart, 10 * 60 * 1000);
 
 // ── kWh Consumption ──
@@ -1809,6 +1814,9 @@ function renderPriceChart(data) {
   if (el) { const net=data.totals.net_cost; el.textContent=data.items.length+' barres · net '+(net>=0?'':'-')+Math.abs(net).toFixed(2)+' €'; }
 }
 setInterval(()=>{ if(document.getElementById('page-energy').classList.contains('active')){ loadKwhHistory(); loadPriceHistory(); } }, 60000);
+
+// Initial route from the URL hash (so a refresh restores the current tab).
+showPage((location.hash || "").replace("#", "") || "energy");
 </script>
 </body>
 </html>
