@@ -920,7 +920,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <div class="toast" id="toast">Saved!</div>
 
 <script>
-const BASE = window.location.pathname.replace(/\/+$/, "");
+const BASE = window.location.pathname.replace(/[\/]+$/, "");
 
 (function(){
   try {

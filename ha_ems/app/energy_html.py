@@ -17,7 +17,7 @@ ENERGY_HTML = r"""<!DOCTYPE html>
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;padding:1rem;padding-bottom:3rem}
-  nav{display:flex;gap:.5rem;margin-bottom:1.25rem;border-bottom:1px solid var(--border);padding-bottom:.75rem}
+  nav{display:flex;gap:.4rem;margin-bottom:1rem;border-bottom:1px solid var(--border);padding-bottom:.6rem;flex-wrap:wrap}
   .nav-btn{padding:.35rem .85rem;border-radius:.5rem;border:1px solid transparent;background:none;color:var(--muted);cursor:pointer;font-size:.85rem;text-decoration:none}
   .nav-btn.active,.nav-btn:hover{background:var(--card);border-color:var(--border);color:var(--text)}
   h1{font-size:1.2rem;font-weight:600;margin-bottom:1rem;display:flex;align-items:center;gap:.5rem}
@@ -27,21 +27,25 @@ ENERGY_HTML = r"""<!DOCTYPE html>
   /* Layout */
   .layout{display:grid;grid-template-columns:1fr 300px;gap:1rem}
   @media(max-width:900px){.layout{grid-template-columns:1fr}}
+  @media(max-width:600px){.layout{gap:.6rem}}
   .left{display:flex;flex-direction:column;gap:1rem}
   .right{display:flex;flex-direction:column;gap:1rem}
 
   /* Cards */
   .card{background:var(--card);border:1px solid var(--border);border-radius:.75rem;padding:1rem}
+  @media(max-width:480px){.card{padding:.75rem .65rem;border-radius:.5rem}}
   .card-title{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:.75rem;font-weight:600}
   .card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem}
   .card-value-big{font-size:1rem;font-weight:700;color:var(--solar)}
 
   /* Chart containers */
   .chart-wrap{position:relative;height:180px}
+  @media(max-width:600px){.chart-wrap{height:140px}}
 
   /* EPEX stat pills */
   .epex-pills{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;margin-bottom:.75rem}
   @media(max-width:600px){.epex-pills{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:600px){.pill-val{font-size:.85rem}}
   .pill{background:#0f172a;border:1px solid var(--border);border-radius:.5rem;padding:.5rem .75rem;text-align:center}
   .pill-label{font-size:.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
   .pill-val{font-size:1rem;font-weight:700;margin-top:.15rem}
@@ -55,6 +59,7 @@ ENERGY_HTML = r"""<!DOCTYPE html>
 
   /* Gauge grid */
   .gauge-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem}
+  @media(max-width:480px){.gauge-grid{gap:.4rem}}
   .gauge-wrap{display:flex;flex-direction:column;align-items:center;padding:.5rem}
   .gauge-canvas-wrap{position:relative;width:100px;height:60px;overflow:hidden}
   .gauge-label{position:absolute;bottom:0;left:50%;transform:translateX(-50%);font-size:14px;font-weight:700;white-space:nowrap}
@@ -80,6 +85,8 @@ ENERGY_HTML = r"""<!DOCTYPE html>
   .plan-table th{color:var(--muted);font-size:.63rem;text-transform:uppercase;padding:.3rem .4rem;border-bottom:1px solid var(--border)}
   .plan-table td{padding:.3rem .4rem;border-bottom:1px solid #1a2233}
   .plan-table tr.plan-now td{background:#0f2318;font-weight:700}
+  @media(max-width:480px){.plan-table .col-solar,.plan-table .col-load{display:none}}
+  @media(max-width:480px){.plan-table td,.plan-table th{padding:.2rem .3rem;font-size:.7rem}}
   .plan-badge{display:inline-block;padding:.1rem .45rem;border-radius:.3rem;font-size:.68rem;font-weight:600}
   .plan-badge.charge{background:#1a3a2a;color:#34d399}
   .plan-badge.discharge{background:#3a1a1a;color:#f87171}
@@ -157,7 +164,7 @@ ENERGY_HTML = r"""<!DOCTYPE html>
       <div class="card-title">24h Optimization Plan</div>
       <div class="no-plan" id="no-plan">No schedule — configure panel or EPEX prices</div>
       <table class="plan-table" id="plan-table" style="display:none">
-        <thead><tr><th>Time</th><th>Solar</th><th>Load</th><th>Price</th><th>Battery</th></tr></thead>
+        <thead><tr><th>Time</th><th class="col-solar">Solar</th><th class="col-load">Load</th><th>Price</th><th>Battery</th></tr></thead>
         <tbody id="plan-body"></tbody>
       </table>
       <div class="updated" id="plan-updated"></div>
@@ -329,27 +336,29 @@ function buildFlow() {
   const solar_w = _state?.solar_w ?? 0;
   const grid_w  = _state?.grid_w  ?? 0;
   const bat_soc = _state?.battery_soc ?? 0;
-  const bat     = _state?.battery ?? 'idle';
-  const surplus = _state?.solar_surplus_w ?? 0;
+  const bat_w   = _state?.battery_w ?? 0;  // negative = charging, positive = discharging
 
-  const importing = grid_w > 0;
-  const exporting = grid_w < 0;
-  const charging  = bat === 'charge';
-  const discharging = bat === 'discharge';
+  const importing   = grid_w  >  50;
+  const exporting   = grid_w  < -50;
+  const charging    = bat_w   < -50;   // battery absorbing power
+  const discharging = bat_w   >  50;   // battery delivering power
+  const bat_abs     = Math.abs(bat_w);
 
   const nodes = [
     { id:'solar',   x:160, y:25,  r:28, color:'#f59e0b', icon:'☀️', label:'Solar',   sub: solar_w+'W' },
     { id:'grid',    x:55,  y:115, r:26, color:'#7c4dff', icon:'⚡',  label:'Grid',    sub: Math.abs(grid_w)+'W' },
     { id:'battery', x:160, y:175, r:28, color:'#10b981', icon:'🔋', label:'Battery', sub: bat_soc+'%' },
-    { id:'home',    x:265, y:115, r:28, color:'#f59e0b', icon:'🏠', label:'Home',    sub: Math.abs(surplus)+'W' },
+    { id:'home',    x:265, y:115, r:28, color:'#f59e0b', icon:'🏠', label:'Home',    sub: (_state?.net_power_w ?? 0)+'W' },
   ];
 
   const edges = [
     solar_w > 50  && { from:'solar',   to:'home',    color:'#f59e0b' },
-    solar_w > 50  && charging && { from:'solar', to:'battery', color:'#e91e8c' },
+    solar_w > 50  && charging && { from:'solar',   to:'battery', color:'#e91e8c' },
+    importing     && charging && { from:'grid',    to:'battery', color:'#7c4dff' },
     importing     && { from:'grid',    to:'home',    color:'#7c4dff' },
     discharging   && { from:'battery', to:'home',    color:'#10b981' },
     exporting     && { from:'solar',   to:'grid',    color:'#10b981' },
+    exporting     && discharging && { from:'battery', to:'grid',  color:'#10b981' },
   ].filter(Boolean);
 
   const pathsG    = document.getElementById('flow-paths');
@@ -501,8 +510,8 @@ function renderPlan() {
     const badge = `<span class="plan-badge ${slot.battery_action}">${slot.battery_action}</span>`;
     tr.innerHTML = `
       <td>${slot.hour_label}${isCurrent ? ' ◀' : ''}</td>
-      <td>${fmtW(slot.solar_w)} W</td>
-      <td>${fmtW(slot.consumption_w)} W</td>
+      <td class="col-solar">${fmtW(slot.solar_w)} W</td>
+      <td class="col-load">${fmtW(slot.consumption_w)} W</td>
       <td>${fmtP(slot.buy_price)} ct</td>
       <td>${badge}</td>`;
     tbody.appendChild(tr);
