@@ -956,6 +956,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- 24h optimized battery plan (from /api/forecast) -->
+  <div class="section-title" style="margin-top:.75rem">Plan batterie 24h <span id="plan-status" style="font-size:.7rem;font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0"></span></div>
+  <div class="card">
+    <div id="plan-empty" class="no-epex" style="display:none">
+      Aucun plan disponible &mdash; n&eacute;cessite les prix EPEX et la configuration panneaux/batterie.
+    </div>
+    <div id="plan-wrap" style="max-height:360px;overflow-y:auto">
+      <table class="price-table">
+        <thead><tr><th>Heure</th><th>Action</th><th>kW</th><th>&euro;/kWh</th><th>Raison</th></tr></thead>
+        <tbody id="plan-body"></tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- kWh + Price history -->
   <div class="section-title" style="margin-top:.75rem">Consommation &amp; Co&ucirc;t</div>
   <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:.75rem;margin-bottom:.75rem">
@@ -1013,7 +1027,7 @@ function showPage(name, btn) {
   document.getElementById("page-" + name).classList.add("active");
   btn.classList.add("active");
   if (name === "settings") loadSettings();
-  if (name === "energy") { if (!_epexData) loadEpex(); loadKwhHistory(); loadPriceHistory(); }
+  if (name === "energy") { if (!_epexData) loadEpex(); loadForecast(); loadKwhHistory(); loadPriceHistory(); }
 }
 
 function showToast() {
@@ -1479,6 +1493,50 @@ function renderSchedule(slots) {
 
 setInterval(()=>{ if(_epexData) renderEpex(); }, 60*1000);
 setInterval(loadEpex, 15*60*1000);
+
+// ── 24h optimized battery plan (/api/forecast) ──
+const PLAN_MAP = {charge:{cls:"green",label:"Charge"},discharge:{cls:"yellow",label:"Décharge"},idle:{cls:"gray",label:"Repos"}};
+async function loadForecast() {
+  try { renderForecast(await fetch(BASE+'/api/forecast').then(r=>r.json())); }
+  catch(e) { console.error('Forecast:', e); }
+}
+function renderForecast(d) {
+  const body = document.getElementById('plan-body');
+  if (!body) return;
+  const empty = document.getElementById('plan-empty');
+  const wrap  = document.getElementById('plan-wrap');
+  const status= document.getElementById('plan-status');
+  const sched = (d && d.schedule) || [];
+  if (!sched.length) {
+    if (empty) empty.style.display = 'block';
+    if (wrap)  wrap.style.display  = 'none';
+    if (status) status.textContent = '';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+  if (wrap)  wrap.style.display  = '';
+  const now = new Date();
+  body.innerHTML = sched.map(function(s) {
+    const h = new Date(s.hour);
+    const isCur = h.getHours() === now.getHours() && h.toDateString() === now.toDateString();
+    const kw = s.battery_kw ? s.battery_kw.toFixed(2) : '';
+    const price = s.buy_price != null ? s.buy_price.toFixed(4) : '--';
+    return '<tr class="'+(isCur?'cur':'')+'"><td>'+s.hour_label+'</td>'
+      +'<td>'+badge(s.battery_action, PLAN_MAP)+'</td>'
+      +'<td>'+kw+'</td><td>'+price+'</td>'
+      +'<td style="color:var(--muted);font-size:.7rem;max-width:160px;white-space:normal">'+(s.reason||'')+'</td></tr>';
+  }).join('');
+  if (status) {
+    const bits = [];
+    if (d.built_at) bits.push('màj '+new Date(d.built_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));
+    bits.push(d.has_solar_forecast ? '☀ prévision solaire' : 'sans prévision solaire');
+    bits.push(d.has_history ? 'historique conso OK' : 'conso par défaut');
+    status.textContent = '· ' + bits.join(' · ');
+  }
+  const cur = body.querySelector('tr.cur');
+  if (cur) setTimeout(function(){ cur.scrollIntoView({block:'nearest'}); }, 100);
+}
+setInterval(function(){ if(document.getElementById('page-energy').classList.contains('active')) loadForecast(); }, 5*60*1000);
 
 // POWER HISTORY CHART
 let _powerChart = null;
