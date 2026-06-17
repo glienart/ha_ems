@@ -57,6 +57,7 @@ class EnergyLogger:
         tariff_consumption: Optional[float],
         tariff_injection: Optional[float],
         interval_s: int,
+        house_w: Optional[float] = None,
     ) -> None:
         """Accumulate one EMS tick into the current hourly bucket."""
         if grid_w is None:
@@ -64,7 +65,7 @@ class EnergyLogger:
 
         key = datetime.now().strftime("%Y-%m-%dT%H")
         b = self._data.setdefault(
-            key, {"kwh_in": 0.0, "kwh_out": 0.0, "cost": 0.0, "revenue": 0.0}
+            key, {"kwh_in": 0.0, "kwh_out": 0.0, "kwh_house": 0.0, "cost": 0.0, "revenue": 0.0}
         )
 
         # W × s → kWh
@@ -79,6 +80,9 @@ class EnergyLogger:
             if tariff_injection is not None:
                 b["revenue"] += kwh * tariff_injection
 
+        if house_w is not None and house_w > 0:
+            b["kwh_house"] += house_w * interval_s / 3_600_000.0
+
         self._save()
 
     # ── Aggregation ───────────────────────────────────────────────────────────
@@ -87,19 +91,26 @@ class EnergyLogger:
         """
         Aggregate hourly buckets into bars.
 
-        period: "day"   → last 30 days  (one bar per day)
+        period: "today" → today's 24 hourly slots (one bar per hour)
+                "day"   → last 30 days  (one bar per day)
                 "week"  → last 13 weeks (one bar per ISO week)
                 "month" → last 12 months
                 "year"  → last 5 years
         """
         agg: dict[str, dict] = defaultdict(
-            lambda: {"kwh_in": 0.0, "kwh_out": 0.0, "cost": 0.0, "revenue": 0.0}
+            lambda: {"kwh_in": 0.0, "kwh_out": 0.0, "kwh_house": 0.0, "cost": 0.0, "revenue": 0.0}
         )
+
+        today_date = datetime.now().strftime("%Y-%m-%d")
 
         for key, bucket in self._data.items():
             # key: "YYYY-MM-DDTHH"
             date_part = key[:10]  # "YYYY-MM-DD"
-            if period == "day":
+            if period == "today":
+                if date_part != today_date:
+                    continue
+                agg_key = key[11:13] + ":00"  # "HH:00"
+            elif period == "day":
                 agg_key = date_part
             elif period == "week":
                 dt = datetime.strptime(date_part, "%Y-%m-%d")
@@ -110,10 +121,10 @@ class EnergyLogger:
             else:  # year
                 agg_key = key[:4]  # "YYYY"
 
-            for k in ("kwh_in", "kwh_out", "cost", "revenue"):
+            for k in ("kwh_in", "kwh_out", "kwh_house", "cost", "revenue"):
                 agg[agg_key][k] += bucket.get(k, 0.0)
 
-        limits = {"day": 30, "week": 13, "month": 12, "year": 5}
+        limits = {"today": 24, "day": 30, "week": 13, "month": 12, "year": 5}
         sorted_keys = sorted(agg)[-limits.get(period, 30):]
 
         items = []
@@ -122,19 +133,21 @@ class EnergyLogger:
             items.append(
                 {
                     "label": k,
-                    "kwh_in":   round(d["kwh_in"],   3),
-                    "kwh_out":  round(d["kwh_out"],  3),
-                    "cost":     round(d["cost"],     4),
-                    "revenue":  round(d["revenue"],  4),
-                    "net_cost": round(d["cost"] - d["revenue"], 4),
+                    "kwh_in":    round(d["kwh_in"],    3),
+                    "kwh_out":   round(d["kwh_out"],   3),
+                    "kwh_house": round(d["kwh_house"], 3),
+                    "cost":      round(d["cost"],      4),
+                    "revenue":   round(d["revenue"],   4),
+                    "net_cost":  round(d["cost"] - d["revenue"], 4),
                 }
             )
 
         totals = {
-            "kwh_in":   round(sum(i["kwh_in"]  for i in items), 3),
-            "kwh_out":  round(sum(i["kwh_out"] for i in items), 3),
-            "cost":     round(sum(i["cost"]    for i in items), 4),
-            "revenue":  round(sum(i["revenue"] for i in items), 4),
+            "kwh_in":    round(sum(i["kwh_in"]    for i in items), 3),
+            "kwh_out":   round(sum(i["kwh_out"]   for i in items), 3),
+            "kwh_house": round(sum(i["kwh_house"] for i in items), 3),
+            "cost":      round(sum(i["cost"]      for i in items), 4),
+            "revenue":   round(sum(i["revenue"]   for i in items), 4),
         }
         totals["net_cost"] = round(totals["cost"] - totals["revenue"], 4)
 

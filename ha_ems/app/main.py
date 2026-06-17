@@ -220,13 +220,14 @@ async def run_optimizer():
             connected=connected,
         ))
 
-    # Record grid energy + cost for history
-    _energy_logger.record(grid_w, effective_consumption, effective_injection, _settings.update_interval)
-
     # Record house consumption for forecast history
     # Energy balance: solar + grid(signed) + battery(signed) = house
     # grid_w < 0 = export, bat_power < 0 = charging
     _eff_house = max(0.0, solar_w + grid_w + (bat_power or 0.0))
+
+    # Record grid energy + cost for history; use sensor if available, fallback to energy balance
+    _house_for_log = house_w if house_w is not None else _eff_house
+    _energy_logger.record(grid_w, effective_consumption, effective_injection, _settings.update_interval, house_w=_house_for_log)
     if _eff_house > 0:
         _consumption_history.record(datetime.now(), _eff_house)
 
@@ -341,7 +342,7 @@ async def api_epex():
 
 @app.get("/api/energy/history")
 async def api_energy_history(period: str = "day"):
-    if period not in ("day", "week", "month", "year"):
+    if period not in ("today", "day", "week", "month", "year"):
         period = "day"
     return JSONResponse(_energy_logger.get_history(period))
 
@@ -928,7 +929,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="card-label" id="sched-title" style="margin-bottom:.4rem">Schedule &mdash; Today</div>
         <div style="max-height:290px;overflow-y:auto">
           <table class="price-table">
-            <thead><tr><th>Time</th><th>€/MWh</th><th></th></tr></thead>
+            <thead><tr><th>Time</th><th>€/kWh</th><th></th></tr></thead>
             <tbody id="sched-body"></tbody>
           </table>
         </div>
@@ -1225,7 +1226,7 @@ async function saveGroup(keys, groupId) {
   const body = {};
   const intKeys   = ['battery_max_charge_w','battery_max_discharge_w','battery_min_soc','battery_max_soc','update_interval','cheap_lookahead_slots','panel_tilt','panel_azimuth'];
   const floatKeys = ['cheap_threshold','expensive_threshold','cheap_hysteresis','expensive_hysteresis','tariff_a_consumption','tariff_b_consumption','tariff_a_injection','tariff_b_injection','latitude','longitude','panel_kwp','battery_capacity_kwh'];
-  for (const key of keys) {
+for (const key of keys) {
     let val;
     if (COMBO_FIELDS.includes(key)) {
       val = getComboValue(key);
@@ -1348,7 +1349,7 @@ async function loadEpex() {
   renderEpex();
 }
 
-function ct(v) { return v != null ? (v*1000).toFixed(1)+' €/MWh' : '--'; }
+function ct(v) { return v != null ? v.toFixed(4)+' €/kWh' : '--'; }
 
 function renderEpex() {
   const d = _epexData;
@@ -1387,7 +1388,7 @@ function drawEpexChart(slots) {
   const mn = Math.min(...slots.map(s=>s.price_eur_kwh));
   const mx = Math.max(...slots.map(s=>s.price_eur_kwh));
   const labels = slots.map(s=>new Date(s.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));
-  const vals   = slots.map(s=>+(s.price_eur_kwh*1000).toFixed(2));
+  const vals   = slots.map(s=>+s.price_eur_kwh.toFixed(4));
   const colors = slots.map(s=>{
     if (new Date(s.start)<=now && now<new Date(s.end)) return 'rgba(245,158,11,.95)';
     const r = mx>mn?(s.price_eur_kwh-mn)/(mx-mn):0.5;
@@ -1400,10 +1401,10 @@ function drawEpexChart(slots) {
     data:{labels,datasets:[{data:vals,backgroundColor:colors,borderRadius:2}]},
     options:{
       responsive:true,maintainAspectRatio:false,animation:{duration:500},
-      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>' '+c.parsed.y.toFixed(1)+' €/MWh'}}},
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>' '+c.parsed.y.toFixed(4)+' €/kWh'}}},
       scales:{
         x:{ticks:{color:getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()||'#6b7280',maxTicksLimit:10,font:{size:9}},grid:{display:false}},
-        y:{ticks:{color:getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()||'#6b7280',font:{size:9},callback:v=>v+' €/MWh'},grid:{color:getComputedStyle(document.documentElement).getPropertyValue('--border').trim()||'#e5e7eb'}}
+        y:{ticks:{color:getComputedStyle(document.documentElement).getPropertyValue('--muted').trim()||'#6b7280',font:{size:9},callback:v=>v+' €/kWh'},grid:{color:getComputedStyle(document.documentElement).getPropertyValue('--border').trim()||'#e5e7eb'}}
       }
     }
   });
@@ -1420,7 +1421,7 @@ function renderSchedule(slots) {
     const pct=mx>mn?Math.round((s.price_eur_kwh-mn)/(mx-mn)*100):50;
     const col=pct<33?'var(--green)':pct>66?'var(--red)':'var(--yellow)';
     const t=new Date(s.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    return '<tr class="'+(isCur?'cur':'')+'"><td>'+t+'</td><td>'+(s.price_eur_kwh*1000).toFixed(1)+'</td><td><div class="pbar" style="width:'+Math.max(4,pct)+'%;background:'+col+'"></div></td></tr>';
+    return '<tr class="'+(isCur?'cur':'')+'"><td>'+t+'</td><td>'+s.price_eur_kwh.toFixed(4)+'</td><td><div class="pbar" style="width:'+Math.max(4,pct)+'%;background:'+col+'"></div></td></tr>';
   }).join('');
   const cur=tbody.querySelector('tr.cur');
   if(cur) setTimeout(()=>cur.scrollIntoView({block:'nearest',behavior:'smooth'}),100);
