@@ -176,5 +176,5 @@ def _parse(xml_text: str, now: datetime) -> dict:
         "tomorrow_avg":     tm_avg,
         "prices_today":     _ser(today_p),
         "prices_tomorrow":  _ser(tmrw_p),
-        "slot_minutes":     prices[0]["slot_min"],
+        "slot_minutes":     prices[0]["slot_min"] if prices else 60,
     }

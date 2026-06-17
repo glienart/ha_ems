@@ -4,11 +4,14 @@ HA EMS Add-on -- FastAPI application.
 from __future__ import annotations
 
 import asyncio
+
+import httpx
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
-from typing import Any, Optional
+from dataclasses import asdict
+from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -40,7 +43,7 @@ _schedule_task: Optional[asyncio.Task] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _loop_task, _epex_task
+    global _loop_task, _epex_task, _schedule_task
     settings_module.save_runtime(_settings)
     _LOGGER.info("Settings persisted to disk on startup")
     _loop_task = asyncio.create_task(ems_loop())
@@ -369,8 +372,7 @@ async def api_power_history():
     params = {"filter_entity_id": ",".join(sensors), "minimal_response": "true",
               "significant_changes_only": "false"}
     try:
-        import httpx as _httpx
-        async with _httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             r = await client.get(url, headers=ha_client._headers(), params=params)
             if r.status_code != 200:
                 return JSONResponse({"series": {}})
@@ -394,8 +396,7 @@ async def api_power_history():
             try:
                 val = float(raw)
                 if isinstance(ts, (int, float)):
-                    from datetime import timezone as _tz
-                    ts = datetime.fromtimestamp(ts, tz=_tz.utc).isoformat()
+                    ts = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
                 points.append([ts, round(val, 1)])
             except (ValueError, TypeError):
                 pass
@@ -406,7 +407,6 @@ async def api_power_history():
 
 @app.get("/api/settings")
 async def api_get_settings():
-    from dataclasses import asdict
     return JSONResponse(asdict(_settings))
 
 
@@ -492,7 +492,7 @@ async def energy_dashboard():
 async def api_entities(device_class: str = ""):
     url = f"{ha_client.HA_API}/states"
     try:
-        async with __import__("httpx").AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(url, headers=ha_client._headers())
             if r.status_code != 200:
                 return JSONResponse({"entities": []})
@@ -617,6 +617,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .d-solar{fill:#ff9800}.d-return{fill:#ff9800}.d-grid{fill:#488fc2}
   .d-bat-home{fill:#4db6ac}.d-bat-grid{fill:#4db6ac}
   .epex-pills{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;margin-bottom:.75rem}
+  @media(max-width:600px){.epex-pills{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:600px){.epex-pills .pill-val{font-size:.8rem}}
   .pill{background:var(--bg);border:1px solid var(--border);border-radius:.5rem;padding:.4rem .6rem;text-align:center}
   .pill-label{font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
   .pill-val{font-size:.95rem;font-weight:700;margin-top:.1rem}
@@ -632,6 +634,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .pbar{height:5px;border-radius:2px;margin-top:2px}
   .energy-layout{display:grid;grid-template-columns:1fr 210px;gap:.75rem}
   @media(max-width:700px){.energy-layout{grid-template-columns:1fr}}
+  .flow-chart-grid{display:grid;grid-template-columns:300px 1fr;gap:.75rem;margin-bottom:.75rem;align-items:start}
+  @media(max-width:720px){.flow-chart-grid{grid-template-columns:1fr}}
+  .ev-fields-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.4rem}
+  @media(max-width:600px){.ev-fields-grid{grid-template-columns:repeat(2,1fr)}}
   .no-epex{font-size:.82rem;color:var(--muted);text-align:center;padding:1.25rem 0;line-height:1.7}
   .no-epex a{color:var(--accent);text-decoration:none;font-weight:500}
   .no-epex a:hover{text-decoration:underline}
@@ -816,7 +822,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
   <!-- Flow + Chart -->
-  <div style="display:grid;grid-template-columns:300px 1fr;gap:.75rem;margin-bottom:.75rem;align-items:start">
+  <div class="flow-chart-grid">
     <div class="card">
       <div class="card-label" style="margin-bottom:.5rem;text-align:center">Live flow</div>
       <div class="ha-e-wrap" style="height:320px">
@@ -1243,7 +1249,7 @@ function _evEntryHtml(i, ev) {
     +'<div class="field"><label>Name</label><input type="text" id="ev_name_'+i+'" value="'+(ev.name||'')+'"></div>'
     +'<div class="field"><label>Charger switch</label><div class="combo"><input class="combo-input" id="s_ev_charger_'+i+'" placeholder="Search switch..." autocomplete="off"><ul class="combo-list" id="sl_ev_charger_'+i+'"></ul></div></div>'
     +'<div class="field"><label>SOC sensor (%)</label><div class="combo"><input class="combo-input" id="s_ev_soc_'+i+'" placeholder="Search % sensor..." autocomplete="off"><ul class="combo-list" id="sl_ev_soc_'+i+'"></ul></div></div>'
-    +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.4rem">'
+    +'<div class="ev-fields-grid">'
     +'<div class="field"><label>Target SOC (%)</label><input type="number" id="ev_target_soc_'+i+'" value="'+(ev.target_soc!=null?ev.target_soc:80)+'" min="20" max="100"></div>'
     +'<div class="field"><label>Departure</label><input type="time" id="ev_departure_'+i+'" value="'+(ev.departure_time||'07:00')+'"></div>'
     +'<div class="field"><label>Max (W)</label><input type="number" id="ev_max_w_'+i+'" value="'+(ev.max_charge_w!=null?ev.max_charge_w:7400)+'" min="1000" max="22000"></div>'

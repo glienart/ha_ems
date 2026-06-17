@@ -1,5 +1,5 @@
 """
-24h battery schedule optimizer for HA EMS v0.5.7.
+24h battery schedule optimizer for HA EMS v0.5.8.
 
 Given solar / consumption forecasts and EPEX day-ahead prices,
 produces a per-hour battery action plan that minimises grid cost.
@@ -12,7 +12,7 @@ Algorithm: two-pass greedy
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
