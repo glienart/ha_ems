@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.32
+
+### Changed
+- **Barre d'onglets** : fond blanc (couleur de carte du thème) sur toute la
+  largeur. L'onglet actif est désormais en **gras et noir** (couleur de texte du
+  thème) avec un soulignement noir, au lieu du bleu d'accent.
+
 ## 0.5.31
 
 ### Changed

@@ -593,13 +593,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;padding:1rem}
-  nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem;border-bottom:1px solid var(--border)}
+  nav{display:flex;justify-content:space-between;align-items:center;background:var(--card);margin:-1rem -1rem 1.25rem;padding:.4rem 1rem 0;border-bottom:1px solid var(--border)}
   .tabs{display:flex;gap:.25rem}
   .nav-btn{padding:.6rem .9rem;margin-bottom:-1px;border:none;border-bottom:2px solid transparent;background:none;color:var(--muted);cursor:pointer;font-size:.9rem;font-weight:500;border-radius:0}
   .nav-btn:hover{color:var(--text)}
-  .nav-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
+  .nav-btn.active{color:var(--text);font-weight:700;border-bottom-color:var(--text)}
   .nav-settings{font-size:1.1rem;padding:.3rem .6rem;margin:0;border:1px solid var(--border)!important;border-radius:.5rem}
-  .nav-settings.active{color:var(--accent)}
+  .nav-settings.active{color:var(--text)}
   .page{display:none}.page.active{display:block}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem;margin-bottom:1rem}
   .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1rem;box-shadow:0 1px 3px rgba(0,0,0,.06)}
