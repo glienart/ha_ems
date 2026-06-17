@@ -682,6 +682,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .energy-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,300px);gap:.75rem}
   .energy-layout > *{min-width:0;overflow:hidden}
   @media(max-width:700px){.energy-layout{grid-template-columns:1fr}}
+  .dual-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.75rem;margin-bottom:.75rem}
+  .dual-grid > *{min-width:0;overflow:hidden}
+  @media(max-width:760px){.dual-grid{grid-template-columns:1fr}}
   .flow-chart-grid{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);gap:.75rem;margin-bottom:.75rem;align-items:start}
   .flow-chart-grid > *{min-width:0;overflow:hidden}
   @media(max-width:720px){.flow-chart-grid{grid-template-columns:1fr}}
@@ -695,39 +698,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <body>
 <nav>
   <div style="display:flex;gap:.5rem">
-    <button class="nav-btn active" onclick="showPage('dashboard',this)">Dashboard</button>
-    <button class="nav-btn" onclick="showPage('energy',this)">Energy</button>
+    <button class="nav-btn active" onclick="showPage('energy',this)">Energy</button>
+    <button class="nav-btn" onclick="showPage('analyse',this)">Analyse</button>
   </div>
   <button class="nav-btn nav-settings" id="btn-settings" onclick="showPage('settings',this)" title="Settings">&#x270E;</button>
 </nav>
-
-<!-- DASHBOARD PAGE -->
-<div id="page-dashboard" class="page active">
-  <div class="section-title">Mode</div>
-  <div class="mode-bar" id="modeBar">
-    <button class="mode-btn" data-mode="auto">Auto</button>
-    <button class="mode-btn" data-mode="eco">Eco</button>
-    <button class="mode-btn" data-mode="cheap">Cheap</button>
-    <button class="mode-btn" data-mode="manual">Manual</button>
-    <button class="mode-btn" data-mode="off">Off</button>
-  </div>
-  <div class="section-title">Live readings</div>
-  <div class="grid">
-    <div class="card"><div class="card-label">Solar</div><div class="card-value" id="solar">--</div><div class="card-sub">W production</div></div>
-    <div class="card"><div class="card-label">Grid</div><div class="card-value" id="grid">--</div><div class="card-sub">W (+ import)</div></div>
-    <div class="card"><div class="card-label">Solar surplus</div><div class="card-value" id="surplus">--</div><div class="card-sub">W available</div></div>
-    <div class="card"><div class="card-label">Battery SOC</div><div class="card-value" id="batSoc">--</div><div class="card-sub">%</div></div>
-    <div id="ev-soc-cards" style="display:contents"></div>
-    <div class="card"><div class="card-label">Buy price</div><div class="card-value" id="tariff">--</div><div class="card-sub" id="tariff-sell-sub">&#8364;/kWh</div></div>
-  </div>
-  <div class="section-title">Decisions</div>
-  <div class="grid">
-    <div class="card"><div class="card-label">Battery</div><div id="batDecision"><span class="badge badge-gray">--</span></div></div>
-    <div id="ev-decision-cards" style="display:contents"></div>
-  </div>
-  <div class="reason-card"><div class="card-label">Last decision reason</div><p id="reason">--</p></div>
-  <div class="updated" id="updated"></div>
-</div>
 
 <!-- SETTINGS PAGE -->
 <div id="page-settings" class="page">
@@ -849,31 +824,31 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 </div>
 
-<!-- ENERGY PAGE -->
-<div id="page-energy" class="page">
-  <!-- Live stat cards -->
-  <div class="grid" style="margin-bottom:.75rem">
-    <div class="card">
-      <div class="card-label" style="color:#ff9800">Solar</div>
-      <div class="card-value" id="ec-solar">-- W</div>
-      <div class="card-sub">Production</div>
-    </div>
-    <div class="card">
-      <div class="card-label" style="color:#488fc2">Grid</div>
-      <div class="card-value" id="ec-grid">-- W</div>
-      <div class="card-sub" id="ec-grid-dir">--</div>
-    </div>
-    <div class="card">
-      <div class="card-label" style="color:var(--accent)">Home</div>
-      <div class="card-value" id="ec-home">-- W</div>
-      <div class="card-sub">Consumption</div>
-    </div>
-    <div class="card">
-      <div class="card-label" style="color:#4db6ac">Battery</div>
-      <div class="card-value" id="ec-bat">-- %</div>
-      <div class="card-sub" id="ec-bat-dec">--</div>
-    </div>
+<!-- ENERGY PAGE (operational: mode + live + flow + history) -->
+<div id="page-energy" class="page active">
+  <div class="section-title">Mode</div>
+  <div class="mode-bar" id="modeBar">
+    <button class="mode-btn" data-mode="auto">Auto</button>
+    <button class="mode-btn" data-mode="eco">Eco</button>
+    <button class="mode-btn" data-mode="cheap">Cheap</button>
+    <button class="mode-btn" data-mode="manual">Manual</button>
+    <button class="mode-btn" data-mode="off">Off</button>
   </div>
+  <div class="section-title">Live readings</div>
+  <div class="grid">
+    <div class="card"><div class="card-label">Solar</div><div class="card-value" id="solar">--</div><div class="card-sub">W production</div></div>
+    <div class="card"><div class="card-label">Grid</div><div class="card-value" id="grid">--</div><div class="card-sub">W (+ import)</div></div>
+    <div class="card"><div class="card-label">Solar surplus</div><div class="card-value" id="surplus">--</div><div class="card-sub">W available</div></div>
+    <div class="card"><div class="card-label">Battery SOC</div><div class="card-value" id="batSoc">--</div><div class="card-sub">%</div></div>
+    <div id="ev-soc-cards" style="display:contents"></div>
+    <div class="card"><div class="card-label">Buy price</div><div class="card-value" id="tariff">--</div><div class="card-sub" id="tariff-sell-sub">&#8364;/kWh</div></div>
+  </div>
+  <div class="section-title">Decisions</div>
+  <div class="grid">
+    <div class="card"><div class="card-label">Battery</div><div id="batDecision"><span class="badge badge-gray">--</span></div></div>
+    <div id="ev-decision-cards" style="display:contents"></div>
+  </div>
+  <div class="reason-card"><div class="card-label">Last decision reason</div><p id="reason">--</p></div>
   <!-- Flow + Chart -->
   <div class="flow-chart-grid">
     <div class="card">
@@ -935,6 +910,39 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Consommation & Coût (history) -->
+  <div class="section-title" style="margin-top:.75rem">Consommation &amp; Co&ucirc;t</div>
+  <div class="dual-grid">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
+        <span class="card-label">Consommation (kWh)</span>
+        <div class="day-toggle">
+          <button class="day-btn active" onclick="setKwhPeriod('today',this)">Heure</button>
+          <button class="day-btn" onclick="setKwhPeriod('day',this)">Jour</button>
+          <button class="day-btn" onclick="setKwhPeriod('month',this)">Mois</button>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="kwhChart"></canvas></div>
+      <div class="updated" id="kwh-updated"></div>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
+        <span class="card-label">Prix pay&eacute; (&euro;)</span>
+        <div class="day-toggle">
+          <button class="day-btn active" onclick="setPricePeriod('today',this)">Heure</button>
+          <button class="day-btn" onclick="setPricePeriod('day',this)">Jour</button>
+          <button class="day-btn" onclick="setPricePeriod('month',this)">Mois</button>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
+      <div class="updated" id="price-updated"></div>
+    </div>
+  </div>
+  <div class="updated" id="updated"></div>
+</div>
+
+<!-- ANALYSE PAGE (EPEX market + 24h battery plan) -->
+<div id="page-analyse" class="page">
   <div class="section-title">EPEX SPOT prices</div>
   <div class="energy-layout">
     <div>
@@ -987,34 +995,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- kWh + Price history -->
-  <div class="section-title" style="margin-top:.75rem">Consommation &amp; Co&ucirc;t</div>
-  <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:.75rem;margin-bottom:.75rem">
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
-        <span class="card-label">Consommation (kWh)</span>
-        <div class="day-toggle">
-          <button class="day-btn active" onclick="setKwhPeriod('today',this)">Heure</button>
-          <button class="day-btn" onclick="setKwhPeriod('day',this)">Jour</button>
-          <button class="day-btn" onclick="setKwhPeriod('month',this)">Mois</button>
-        </div>
-      </div>
-      <div class="chart-wrap"><canvas id="kwhChart"></canvas></div>
-      <div class="updated" id="kwh-updated"></div>
-    </div>
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
-        <span class="card-label">Prix pay&eacute; (&euro;)</span>
-        <div class="day-toggle">
-          <button class="day-btn active" onclick="setPricePeriod('today',this)">Heure</button>
-          <button class="day-btn" onclick="setPricePeriod('day',this)">Jour</button>
-          <button class="day-btn" onclick="setPricePeriod('month',this)">Mois</button>
-        </div>
-      </div>
-      <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
-      <div class="updated" id="price-updated"></div>
-    </div>
-  </div>
 </div>
 
 <div class="toast" id="toast">Saved!</div>
@@ -1044,7 +1024,8 @@ function showPage(name, btn) {
   document.getElementById("page-" + name).classList.add("active");
   btn.classList.add("active");
   if (name === "settings") loadSettings();
-  if (name === "energy") { if (!_epexData) loadEpex(); loadForecast(); loadKwhHistory(); loadPriceHistory(); }
+  if (name === "energy") { loadPowerChart(); loadKwhHistory(); loadPriceHistory(); }
+  if (name === "analyse") { if (!_epexData) loadEpex(); loadForecast(); }
 }
 
 function showToast() {
@@ -1553,7 +1534,7 @@ function renderForecast(d) {
   const cur = body.querySelector('tr.cur');
   if (cur) setTimeout(function(){ cur.scrollIntoView({block:'nearest'}); }, 100);
 }
-setInterval(function(){ if(document.getElementById('page-energy').classList.contains('active')) loadForecast(); }, 5*60*1000);
+setInterval(function(){ if(document.getElementById('page-analyse').classList.contains('active')) loadForecast(); }, 5*60*1000);
 
 // POWER HISTORY CHART
 let _powerChart = null;
@@ -1677,6 +1658,8 @@ function renderPowerChart(series) {
 }
 
 loadPowerChart();
+loadKwhHistory();   // Energy is the default tab, so load its history charts on init
+loadPriceHistory();
 setInterval(loadPowerChart, 10 * 60 * 1000);
 
 // ── kWh Consumption ──
@@ -1701,27 +1684,31 @@ function renderKwhChart(data) {
   const imported = data.items.map(i=>+(i.kwh_in||0).toFixed(3));
   const exported = data.items.map(i=>+(i.kwh_out||0).toFixed(3));
   const hasHouse = house.some(v=>v>0);
+  // Stack the consumption breakdown above the axis: part covered by own solar
+  // (consumption minus grid import) + grid import. Export is drawn below zero.
+  const selfSolar = house.map((h,i)=>+Math.max(0, h - imported[i]).toFixed(3));
+  const negExport = exported.map(v=>+(-v).toFixed(3));
   const ctx = document.getElementById('kwhChart').getContext('2d');
   if (_kwhChartInst) _kwhChartInst.destroy();
   const datasets = hasHouse
     ? [
-        { label:'Consommation (kWh)', data:house,    backgroundColor:'rgba(245,158,11,0.75)', borderRadius:2 },
-        { label:'Importé (kWh)', data:imported, backgroundColor:'rgba(124,77,255,0.5)',  borderRadius:2 },
-        { label:'Exporté (kWh)', data:exported, backgroundColor:'rgba(16,185,129,0.5)',  borderRadius:2 },
+        { label:'Autoconso. solaire', data:selfSolar, backgroundColor:'rgba(245,158,11,0.8)', borderRadius:2, stack:'e' },
+        { label:'Importé (kWh)',      data:imported,  backgroundColor:'rgba(124,77,255,0.7)', borderRadius:2, stack:'e' },
+        { label:'Exporté (kWh)',      data:negExport, backgroundColor:'rgba(16,185,129,0.7)', borderRadius:2, stack:'e' },
       ]
     : [
-        { label:'Importé (kWh)', data:imported, backgroundColor:'rgba(124,77,255,0.75)', borderRadius:2 },
-        { label:'Exporté (kWh)', data:exported, backgroundColor:'rgba(16,185,129,0.75)', borderRadius:2 },
+        { label:'Importé (kWh)', data:imported,  backgroundColor:'rgba(124,77,255,0.75)', borderRadius:2, stack:'e' },
+        { label:'Exporté (kWh)', data:negExport,  backgroundColor:'rgba(16,185,129,0.75)', borderRadius:2, stack:'e' },
       ];
   _kwhChartInst = new Chart(ctx, {
     type:'bar', data:{labels,datasets},
     options:{
       responsive:true, maintainAspectRatio:false, animation:{duration:400},
       plugins:{ legend:{display:true,labels:{color:'#9ca3af',font:{size:10}}},
-                tooltip:{callbacks:{label:c=>` ${c.parsed.y.toFixed(3)} kWh`}} },
+                tooltip:{callbacks:{label:c=>` ${c.dataset.label}: ${Math.abs(c.parsed.y).toFixed(3)} kWh`}} },
       scales:{
-        x:{ticks:{color:'#6b7280',maxTicksLimit:12,font:{size:9}},grid:{display:false}},
-        y:{ticks:{color:'#6b7280',font:{size:9},callback:v=>v.toFixed(2)+' kWh'},grid:{color:'rgba(55,65,81,0.5)'}}
+        x:{stacked:true,ticks:{color:'#6b7280',maxTicksLimit:12,font:{size:9}},grid:{display:false}},
+        y:{stacked:true,ticks:{color:'#6b7280',font:{size:9},callback:v=>v.toFixed(2)+' kWh'},grid:{color:'rgba(55,65,81,0.5)'}}
       }
     }
   });
@@ -1748,21 +1735,22 @@ function renderPriceChart(data) {
   const labels   = data.items.map(i=>i.label);
   const costs    = data.items.map(i=>+(i.cost||0).toFixed(4));
   const revenues = data.items.map(i=>+(i.revenue||0).toFixed(4));
+  const negCosts = costs.map(v=>+(-v).toFixed(4));   // cost drawn below the axis
   const ctx = document.getElementById('priceChart').getContext('2d');
   if (_priceChartInst) _priceChartInst.destroy();
   _priceChartInst = new Chart(ctx, {
     type:'bar',
     data:{labels,datasets:[
-      {label:'Coût (€)',   data:costs,    backgroundColor:'rgba(239,68,68,0.75)',  borderRadius:2},
-      {label:'Revenu (€)', data:revenues, backgroundColor:'rgba(16,185,129,0.75)', borderRadius:2},
+      {label:'Revenu (€)', data:revenues, backgroundColor:'rgba(16,185,129,0.75)', borderRadius:2, stack:'p'},
+      {label:'Coût (€)',   data:negCosts, backgroundColor:'rgba(239,68,68,0.75)',  borderRadius:2, stack:'p'},
     ]},
     options:{
       responsive:true, maintainAspectRatio:false, animation:{duration:400},
       plugins:{ legend:{display:true,labels:{color:'#9ca3af',font:{size:10}}},
-                tooltip:{callbacks:{label:c=>` ${c.parsed.y.toFixed(4)} €`}} },
+                tooltip:{callbacks:{label:c=>` ${c.dataset.label}: ${Math.abs(c.parsed.y).toFixed(4)} €`}} },
       scales:{
-        x:{ticks:{color:'#6b7280',maxTicksLimit:12,font:{size:9}},grid:{display:false}},
-        y:{ticks:{color:'#6b7280',font:{size:9},callback:v=>v.toFixed(3)+' €'},grid:{color:'rgba(55,65,81,0.5)'}}
+        x:{stacked:true,ticks:{color:'#6b7280',maxTicksLimit:12,font:{size:9}},grid:{display:false}},
+        y:{stacked:true,ticks:{color:'#6b7280',font:{size:9},callback:v=>v.toFixed(3)+' €'},grid:{color:'rgba(55,65,81,0.5)'}}
       }
     }
   });

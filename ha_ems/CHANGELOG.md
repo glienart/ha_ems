@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.27
+
+### Changed
+- **Refonte des onglets** : l'onglet *Dashboard* est supprimé et fusionné dans
+  **Energy** (mode + relevés en direct + décisions + flux + graphe de puissance
+  + Consommation/Coût). Nouvel onglet **Analyse** regroupant les prix EPEX et le
+  plan batterie 24h.
+- **Graphe Consommation** : barres empilées (autoconsommation solaire + import)
+  au-dessus de l'axe, export en négatif en dessous ; empilement vertical sur
+  écran étroit (responsive).
+- **Graphe Prix payé** : coût affiché en négatif sous le revenu (couleurs
+  conservées — revenu vert, coût rouge).
+
 ## 0.5.26
 
 ### Fixed

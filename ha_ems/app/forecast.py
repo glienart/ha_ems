@@ -1,5 +1,5 @@
 """
-Solar production forecast and consumption history for HA EMS v0.5.26.
+Solar production forecast and consumption history for HA EMS v0.5.27.
 
 Solar forecast: Forecast.Solar API (free, no API key required).
   GET https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}
