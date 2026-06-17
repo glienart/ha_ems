@@ -366,7 +366,7 @@ class EmsOptimizer:
     def _compute_net(snap):
         house = snap.house_power_w
         if house is None:
-            house = snap.solar_power_w - snap.grid_power_w
+            house = snap.solar_power_w + snap.grid_power_w
         surplus = snap.solar_power_w - house
         return snap.grid_power_w, surplus
 

@@ -219,8 +219,10 @@ async def run_optimizer():
         ))
 
     # Record house consumption for forecast history
-    _eff_house = house_w if house_w is not None else (solar_w - grid_w if solar_w and grid_w else None)
-    if _eff_house is not None and _eff_house > 0:
+    # Energy balance: solar + grid(signed) + battery(signed) = house
+    # grid_w < 0 = export, bat_power < 0 = charging
+    _eff_house = max(0.0, solar_w + grid_w + (bat_power or 0.0))
+    if _eff_house > 0:
         _consumption_history.record(datetime.now(), _eff_house)
 
     # Get scheduled action for this hour from 24h plan
@@ -314,10 +316,7 @@ async def run_optimizer():
         "tariff_injection": round(effective_injection, 4) if effective_injection is not None else None,
         "epex_raw": round(epex_raw, 4) if epex_raw is not None else None,
         "battery_w": round(bat_power) if bat_power is not None else None,
-        "house_w": round(max(0.0,
-            house_w if (house_w is not None and house_w > 0)
-            else solar_w + grid_w + (bat_power or 0)
-        )),
+        "house_w": round(max(0.0, solar_w + grid_w + (bat_power or 0.0))),
         "epex_price": _epex_data.get("current_price") if _epex_data else None,
         "reason": decision.reason,
         "updated_at": datetime.now().isoformat(),
