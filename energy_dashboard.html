@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Energy Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, 'Roboto', sans-serif;
+    background: #f0f2f5;
+    color: #1a1a2e;
+    min-height: 100vh;
+  }
+
+  /* ── NAV ── */
+  .nav {
+    background: white;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: 0 20px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.12);
+    position: sticky; top: 0; z-index: 100;
+  }
+  .nav-tab {
+    padding: 14px 20px;
+    font-size: 14px;
+    font-weight: 500;
+    color: #666;
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    transition: all .2s;
+    white-space: nowrap;
+  }
+  .nav-tab.active { color: #03a9f4; border-color: #03a9f4; }
+  .nav-tab:hover:not(.active) { color: #333; background: #f5f5f5; }
+  .nav-actions { margin-left: auto; display: flex; gap: 12px; color: #666; font-size: 20px; cursor: pointer; }
+
+  /* ── LAYOUT ── */
+  .dashboard {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 16px;
+    padding: 16px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+  .left-col { display: flex; flex-direction: column; gap: 16px; }
+  .right-col { display: flex; flex-direction: column; gap: 16px; }
+
+  /* ── CARDS ── */
+  .card {
+    background: white;
+    border-radius: 12px;
+    padding: 18px 20px;
+    box-shadow: 0 1px 6px rgba(0,0,0,.08);
+  }
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #444;
+    margin-bottom: 12px;
+    letter-spacing: .3px;
+  }
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .card-value {
+    font-size: 13px;
+    color: #888;
+    font-weight: 500;
+  }
+
+  /* ── CHARTS ── */
+  .chart-wrap { position: relative; height: 170px; }
+
+  /* ── SOURCES TABLE ── */
+  .sources-table { width: 100%; border-collapse: collapse; }
+  .sources-table th {
+    text-align: left; font-size: 11px; color: #999;
+    font-weight: 600; padding: 6px 8px; border-bottom: 1px solid #f0f0f0;
+    text-transform: uppercase; letter-spacing: .5px;
+  }
+  .sources-table th:last-child { text-align: right; }
+  .sources-table td { font-size: 13px; padding: 7px 8px; color: #444; }
+  .sources-table td:last-child { text-align: right; font-weight: 600; color: #222; }
+  .sources-table tr:hover td { background: #fafafa; }
+  .dot {
+    display: inline-block; width: 10px; height: 10px;
+    border-radius: 50%; margin-right: 7px; flex-shrink: 0;
+  }
+  .source-name { display: flex; align-items: center; }
+  .section-row td { font-weight: 700; font-size: 13px; color: #222; background: #fafafa; }
+
+  /* ── FLOW DIAGRAM ── */
+  .flow-card { padding: 16px; }
+  #flow-svg { width: 100%; height: 200px; overflow: visible; }
+
+  /* ── GRID BALANCE ── */
+  .balance-bar-wrap {
+    height: 24px; border-radius: 12px; overflow: hidden;
+    background: #e8e8e8; display: flex; margin-top: 8px;
+  }
+  .balance-bar-in {
+    background: linear-gradient(90deg, #7c4dff, #9575cd);
+    border-radius: 12px 0 0 12px;
+    transition: width 1.2s cubic-bezier(.4,0,.2,1);
+    display: flex; align-items: center; justify-content: flex-end;
+    padding-right: 8px; font-size: 11px; color: white; font-weight: 600;
+  }
+  .balance-bar-out {
+    background: linear-gradient(90deg, #b0bec5, #cfd8dc);
+    flex: 1;
+    display: flex; align-items: center; padding-left: 6px;
+    font-size: 11px; color: #666; font-weight: 500;
+  }
+  .balance-label { display: flex; justify-content: space-between; font-size: 11px; color: #888; margin-top: 4px; }
+
+  /* ── GAUGES ── */
+  .gauges-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .gauge-wrap {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 12px 8px 8px;
+  }
+  .gauge-canvas-wrap { position: relative; width: 110px; height: 65px; overflow: hidden; }
+  .gauge-label-center {
+    position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
+    font-size: 16px; font-weight: 700; color: #222; white-space: nowrap;
+    text-align: center;
+  }
+  .gauge-sub { font-size: 11px; color: #888; text-align: center; margin-top: 4px; line-height: 1.3; max-width: 110px; }
+
+  /* ── DATE PICKER ── */
+  .date-bar {
+    background: white;
+    border-radius: 24px;
+    padding: 8px 18px;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #333;
+    box-shadow: 0 2px 8px rgba(0,0,0,.12);
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    z-index: 200;
+  }
+  .date-bar .now-chip {
+    background: #03a9f4; color: white;
+    border-radius: 12px; padding: 2px 10px;
+    font-size: 12px; font-weight: 600;
+  }
+  .date-bar button {
+    background: none; border: none; color: #666;
+    font-size: 16px; cursor: pointer; padding: 2px 4px;
+    border-radius: 4px; transition: background .15s;
+  }
+  .date-bar button:hover { background: #f0f0f0; }
+
+  /* ── ANIMATIONS ── */
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .card { animation: fadeInUp .4s ease both; }
+  .card:nth-child(1) { animation-delay: .05s; }
+  .card:nth-child(2) { animation-delay: .1s; }
+  .card:nth-child(3) { animation-delay: .15s; }
+  .right-col .card:nth-child(1) { animation-delay: .08s; }
+  .right-col .card:nth-child(2) { animation-delay: .13s; }
+  .right-col .card:nth-child(3) { animation-delay: .18s; }
+
+  /* flow node */
+  .flow-node { cursor: default; }
+  .flow-node circle { transition: r .2s; }
+  .flow-node:hover circle { filter: brightness(1.1); }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav class="nav">
+  <div class="nav-tab">Summary</div>
+  <div class="nav-tab active">Electricity</div>
+  <div class="nav-tab">Gas</div>
+  <div class="nav-tab">Now</div>
+  <div class="nav-actions">
+    <span title="Add">＋</span>
+    <span title="Search">🔍</span>
+    <span title="Chat">💬</span>
+    <span title="Edit">✏️</span>
+  </div>
+</nav>
+
+<!-- DASHBOARD -->
+<div class="dashboard">
+
+  <!-- LEFT -->
+  <div class="left-col">
+
+    <!-- Energy Usage Chart -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Energy usage</span>
+        <span class="card-value">+13.1 kWh</span>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="usageChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Solar Production Chart -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Solar production</span>
+        <span class="card-value">18 kWh</span>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="solarChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Sources Table -->
+    <div class="card">
+      <div class="card-title">Sources</div>
+      <table class="sources-table">
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Usage</th>
+          </tr>
+        </thead>
+        <tbody id="sourcesBody"></tbody>
+      </table>
+    </div>
+
+  </div>
+
+  <!-- RIGHT -->
+  <div class="right-col">
+
+    <!-- Energy Distribution Flow -->
+    <div class="card flow-card">
+      <div class="card-title">Energy distribution</div>
+      <svg id="flow-svg" viewBox="0 0 300 190" xmlns="http://www.w3.org/2000/svg">
+        <!-- Connections drawn by JS -->
+        <g id="flow-paths"></g>
+        <g id="flow-particles"></g>
+        <!-- Nodes drawn by JS -->
+        <g id="flow-nodes"></g>
+      </svg>
+    </div>
+
+    <!-- Grid Energy Balance -->
+    <div class="card">
+      <div class="card-title">Grid energy balance</div>
+      <div class="balance-label">
+        <span style="color:#7c4dff">−2 kWh · −6 kWh</span>
+        <span>+4 kWh</span>
+      </div>
+      <div class="balance-bar-wrap">
+        <div class="balance-bar-in" id="balanceIn" style="width:0%">
+          <span id="balanceInTxt"></span>
+        </div>
+        <div class="balance-bar-out"></div>
+      </div>
+    </div>
+
+    <!-- Gauges -->
+    <div class="card">
+      <div class="gauges-grid">
+        <div class="gauge-wrap">
+          <div class="gauge-canvas-wrap">
+            <canvas id="g1" width="110" height="65"></canvas>
+            <div class="gauge-label-center" id="g1-lbl">0 kWh</div>
+          </div>
+          <div class="gauge-sub">Net exported to grid</div>
+        </div>
+        <div class="gauge-wrap">
+          <div class="gauge-canvas-wrap">
+            <canvas id="g2" width="110" height="65"></canvas>
+            <div class="gauge-label-center" id="g2-lbl">0%</div>
+          </div>
+          <div class="gauge-sub">Self-consumed solar energy</div>
+        </div>
+        <div class="gauge-wrap">
+          <div class="gauge-canvas-wrap">
+            <canvas id="g3" width="110" height="65"></canvas>
+            <div class="gauge-label-center" id="g3-lbl">0%</div>
+          </div>
+          <div class="gauge-sub">Self-sufficiency</div>
+        </div>
+        <div class="gauge-wrap">
+          <div class="gauge-canvas-wrap">
+            <canvas id="g4" width="110" height="65"></canvas>
+            <div class="gauge-label-center" id="g4-lbl">0%</div>
+          </div>
+          <div class="gauge-sub">Low-carbon electricity consumed</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- DATE BAR -->
+<div class="date-bar">
+  📅 15 Jun
+  <span class="now-chip">Now</span>
+  <button>‹</button>
+  <button>›</button>
+  <button>⋯</button>
+</div>
+
+<script>
+/* ════════════════════════════════════════
+   DATA
+════════════════════════════════════════ */
+const hours = Array.from({length: 24}, (_, i) => `${i}:00`);
+
+// Hourly stacked: [lowCarbon, solar, batDischarge, batCharge, gridConsumption]
+const usageData = {
+  lowCarbon:    [0.05,0.05,0.05,0.05,0.05,0.05,0.05, 0.1, 0.2, 0.15,0.1, 0.1, 0.05,0.05,0.05,0.05,0.05,0.05,0.1, 0.1, 0.1, 0.08,0.05,0.05],
+  solar:        [0,   0,   0,   0,   0,   0,   0,    0,   0.5, 0.8, 1.2, 1.5, 1.8, 2.0, 1.8, 1.5, 1.0, 0.5, 0.2, 0,   0,   0,   0,   0   ],
+  batDischarge: [0,   0,   0,   0,   0,   0.2, 0.1,  0.3, 0.4, 0.5, 0.3, 0.2, 0.3, 0.2, 0.3, 0.4, 0.5, 0.6, 0.4, 0.3, 0.2, 0.1, 0,   0   ],
+  batCharge:    [0,   0,   0,   0,   0,   0,   0,    0,  -0.2,-0.4,-0.6,-0.8,-1.0,-1.2,-1.0,-0.8,-0.6,-0.3,-0.1, 0,   0,   0,   0,   0   ],
+  gridConsump:  [0.1, 0.1, 0.08,0.08,0.08,0.05,0.1,  0.3, 0.2, 0.1, 0.1, 0.1, 0.05,0.05,0.1, 0.1, 0.2, 0.3, 0.4, 0.4, 0.3, 0.2, 0.1, 0.1],
+};
+
+const solarHourly = [0,0,0,0,0,0,0, 0.3,0.7,0.9,1.2,1.5,1.8,3.5,3.8,3.0,2.9,2.5,1.8,0.8,0,0,0,0];
+
+const sources = [
+  { label: 'Solis S6-EH3P PV Total Energy Generation', color: '#ff8800', value: '18 kWh', section: null },
+  { label: 'Solar total', color: null, value: '18 kWh', section: true },
+  { label: 'Solis S6-EH3P Today Battery Discharge Energy', color: '#4ecdc4', value: '3.2 kWh', section: null },
+  { label: 'Solis S6-EH3P Today Battery Charge Energy', color: '#e91e8c', value: '−4.1 kWh', section: null },
+  { label: 'Battery total', color: null, value: '−0.9 kWh', section: true },
+];
+
+/* ════════════════════════════════════════
+   CHARTS
+════════════════════════════════════════ */
+const chartDefaults = {
+  responsive: true, maintainAspectRatio: false,
+  animation: { duration: 1200, easing: 'easeInOutQuart' },
+  plugins: { legend: { display: false }, tooltip: {
+    callbacks: {
+      label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} kWh`
+    }
+  }},
+  scales: {
+    x: {
+      stacked: true,
+      grid: { display: false },
+      ticks: { font: { size: 11 }, color: '#aaa', maxTicksLimit: 8 },
+    },
+    y: {
+      stacked: true,
+      grid: { color: '#f0f0f0' },
+      ticks: { font: { size: 11 }, color: '#aaa',
+        callback: v => v + ' kWh'
+      },
+    }
+  }
+};
+
+new Chart(document.getElementById('usageChart'), {
+  type: 'bar',
+  data: {
+    labels: hours,
+    datasets: [
+      { label: 'Low-carbon grid',   data: usageData.lowCarbon,    backgroundColor: '#4caf50', stack: 'pos', borderRadius: 2 },
+      { label: 'Solar',             data: usageData.solar,         backgroundColor: '#ff8800', stack: 'pos', borderRadius: 2 },
+      { label: 'Battery discharge', data: usageData.batDischarge,  backgroundColor: '#4ecdc4', stack: 'pos', borderRadius: 2 },
+      { label: 'Battery charge',    data: usageData.batCharge,     backgroundColor: '#e91e8c', stack: 'neg', borderRadius: 2 },
+      { label: 'Grid consumption',  data: usageData.gridConsump,   backgroundColor: '#7c4dff', stack: 'pos', borderRadius: 2 },
+    ]
+  },
+  options: { ...chartDefaults }
+});
+
+new Chart(document.getElementById('solarChart'), {
+  type: 'bar',
+  data: {
+    labels: hours,
+    datasets: [{
+      label: 'Solar production',
+      data: solarHourly,
+      backgroundColor: '#ff8800',
+      borderRadius: 3,
+    }]
+  },
+  options: {
+    ...chartDefaults,
+    scales: {
+      x: { grid: { display: false }, ticks: { font: { size: 11 }, color: '#aaa', maxTicksLimit: 8 } },
+      y: { grid: { color: '#f0f0f0' }, ticks: { font: { size: 11 }, color: '#aaa', callback: v => v + ' kWh' } }
+    }
+  }
+});
+
+/* ════════════════════════════════════════
+   SOURCES TABLE
+════════════════════════════════════════ */
+const tbody = document.getElementById('sourcesBody');
+sources.forEach(s => {
+  const tr = document.createElement('tr');
+  if (s.section) tr.classList.add('section-row');
+  tr.innerHTML = `
+    <td><span class="source-name">
+      ${s.color ? `<span class="dot" style="background:${s.color}"></span>` : '<span style="width:17px;display:inline-block"></span>'}
+      ${s.label}
+    </span></td>
+    <td>${s.value}</td>`;
+  tbody.appendChild(tr);
+});
+
+/* ════════════════════════════════════════
+   FLOW DIAGRAM
+════════════════════════════════════════ */
+const flowNodes = [
+  { id: 'lowcarbon', x: 40,  y: 35,  r: 28, color: '#4caf50', icon: '⚡', label: 'Low-carbon', sub: '1.76 kWh' },
+  { id: 'solar',     x: 150, y: 20,  r: 28, color: '#ff8800', icon: '☀️', label: 'Solar',      sub: '18 kWh' },
+  { id: 'gas',       x: 260, y: 35,  r: 28, color: '#ff6b00', icon: '🔥', label: 'Gas',        sub: '1.24 m³' },
+  { id: 'grid',      x: 80,  y: 110, r: 26, color: '#7c4dff', icon: '⚡', label: 'Grid',       sub: '+6kW\n+2kW' },
+  { id: 'battery',   x: 150, y: 165, r: 30, color: '#455a64', icon: '🔋', label: 'Battery',    sub: '100%' },
+  { id: 'home',      x: 240, y: 110, r: 30, color: '#ff8800', icon: '🏠', label: 'Home',       sub: '1.1 kWh' },
+];
+
+const flowEdges = [
+  { from: 'lowcarbon', to: 'grid',    color: '#4caf50', animated: true  },
+  { from: 'solar',     to: 'home',    color: '#ff8800', animated: true  },
+  { from: 'solar',     to: 'battery', color: '#e91e8c', animated: true  },
+  { from: 'gas',       to: 'home',    color: '#ff6b00', animated: false },
+  { from: 'grid',      to: 'home',    color: '#7c4dff', animated: true  },
+  { from: 'battery',   to: 'home',    color: '#4ecdc4', animated: true  },
+];
+
+const svgNS = 'http://www.w3.org/2000/svg';
+const svg = document.getElementById('flow-svg');
+const pathsG = document.getElementById('flow-paths');
+const particlesG = document.getElementById('flow-particles');
+const nodesG = document.getElementById('flow-nodes');
+
+// Helper: node by id
+const nodeById = id => flowNodes.find(n => n.id === id);
+
+// Draw edges
+const pathEls = [];
+flowEdges.forEach(e => {
+  const a = nodeById(e.from), b = nodeById(e.to);
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const cx = a.x + dx * 0.5, cy = a.y;
+  const path = document.createElementNS(svgNS, 'path');
+  path.setAttribute('d', `M${a.x},${a.y} C${cx},${a.y} ${cx},${b.y} ${b.x},${b.y}`);
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', e.color);
+  path.setAttribute('stroke-width', '2.5');
+  path.setAttribute('opacity', '0.35');
+  path.setAttribute('stroke-linecap', 'round');
+  pathsG.appendChild(path);
+  pathEls.push({ el: path, edge: e, from: a, to: b });
+});
+
+// Draw nodes
+flowNodes.forEach(n => {
+  const g = document.createElementNS(svgNS, 'g');
+  g.classList.add('flow-node');
+
+  // Outer glow ring
+  const glow = document.createElementNS(svgNS, 'circle');
+  glow.setAttribute('cx', n.x); glow.setAttribute('cy', n.y); glow.setAttribute('r', n.r + 5);
+  glow.setAttribute('fill', n.color); glow.setAttribute('opacity', '0.12');
+  g.appendChild(glow);
+
+  // Main circle
+  const c = document.createElementNS(svgNS, 'circle');
+  c.setAttribute('cx', n.x); c.setAttribute('cy', n.y); c.setAttribute('r', n.r);
+  c.setAttribute('fill', 'white'); c.setAttribute('stroke', n.color); c.setAttribute('stroke-width', '2.5');
+  c.setAttribute('filter', 'url(#shadow)');
+  g.appendChild(c);
+
+  // Icon
+  const icon = document.createElementNS(svgNS, 'text');
+  icon.setAttribute('x', n.x); icon.setAttribute('y', n.y + 1);
+  icon.setAttribute('text-anchor', 'middle'); icon.setAttribute('dominant-baseline', 'middle');
+  icon.setAttribute('font-size', n.r * 0.75);
+  icon.textContent = n.icon;
+  g.appendChild(icon);
+
+  // Label below
+  const label = document.createElementNS(svgNS, 'text');
+  label.setAttribute('x', n.x); label.setAttribute('y', n.y + n.r + 11);
+  label.setAttribute('text-anchor', 'middle'); label.setAttribute('font-size', '9');
+  label.setAttribute('fill', '#666'); label.setAttribute('font-weight', '600');
+  label.textContent = n.label;
+  g.appendChild(label);
+
+  const sub = document.createElementNS(svgNS, 'text');
+  sub.setAttribute('x', n.x); sub.setAttribute('y', n.y + n.r + 21);
+  sub.setAttribute('text-anchor', 'middle'); sub.setAttribute('font-size', '8.5');
+  sub.setAttribute('fill', n.color); sub.setAttribute('font-weight', '700');
+  sub.textContent = n.sub;
+  g.appendChild(sub);
+
+  nodesG.appendChild(g);
+});
+
+// Drop shadow filter
+const defs = document.createElementNS(svgNS, 'defs');
+defs.innerHTML = `<filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+  <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#0002"/>
+</filter>`;
+svg.insertBefore(defs, svg.firstChild);
+
+/* ── Animated particles along paths ── */
+const particles = [];
+
+pathEls.forEach(({ el, edge }) => {
+  if (!edge.animated) return;
+  const len = el.getTotalLength();
+  // create 3 particles per edge
+  for (let i = 0; i < 3; i++) {
+    const c = document.createElementNS(svgNS, 'circle');
+    c.setAttribute('r', '3.5');
+    c.setAttribute('fill', edge.color);
+    c.setAttribute('opacity', '0.85');
+    particlesG.appendChild(c);
+    particles.push({
+      el: c, path: el, len,
+      progress: i / 3,   // staggered
+      speed: 0.003 + Math.random() * 0.001,
+    });
+  }
+});
+
+function animateParticles() {
+  particles.forEach(p => {
+    p.progress += p.speed;
+    if (p.progress > 1) p.progress -= 1;
+    const pt = p.path.getPointAtLength(p.progress * p.len);
+    p.el.setAttribute('cx', pt.x);
+    p.el.setAttribute('cy', pt.y);
+    // fade near ends
+    const fade = Math.sin(p.progress * Math.PI);
+    p.el.setAttribute('opacity', (0.4 + fade * 0.6).toFixed(2));
+  });
+  requestAnimationFrame(animateParticles);
+}
+animateParticles();
+
+/* ════════════════════════════════════════
+   GRID BALANCE BAR
+════════════════════════════════════════ */
+setTimeout(() => {
+  document.getElementById('balanceIn').style.width = '65%';
+  document.getElementById('balanceInTxt').textContent = '−2 · −6';
+}, 400);
+
+/* ════════════════════════════════════════
+   GAUGES
+════════════════════════════════════════ */
+function drawGauge(canvasId, labelId, value, max, color, unit) {
+  const canvas = document.getElementById(canvasId);
+  const ctx = canvas.getContext('2d');
+  const cx = 55, cy = 58, r = 42;
+  const startAngle = Math.PI;
+  const endAngle   = 2 * Math.PI;
+  let current = 0;
+  const target = value / max;
+
+  // Animate
+  function frame() {
+    current += (target - current) * 0.05;
+    ctx.clearRect(0, 0, 110, 65);
+
+    // Background arc
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, startAngle, endAngle);
+    ctx.strokeStyle = '#e8e8e8';
+    ctx.lineWidth = 11;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // Value arc
+    if (current > 0.005) {
+      const grad = ctx.createLinearGradient(cx - r, cy, cx + r, cy);
+      grad.addColorStop(0, color + '99');
+      grad.addColorStop(1, color);
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, startAngle, startAngle + current * Math.PI);
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 11;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+    }
+
+    // Update label
+    const displayed = unit === 'kWh'
+      ? (current * max).toFixed(1) + ' kWh'
+      : Math.round(current * max) + '%';
+    document.getElementById(labelId).textContent = displayed;
+
+    if (Math.abs(current - target) > 0.001) requestAnimationFrame(frame);
+  }
+  frame();
+}
+
+setTimeout(() => {
+  drawGauge('g1', 'g1-lbl', 4,   10,   '#03a9f4', 'kWh');
+  drawGauge('g2', 'g2-lbl', 63,  100,  '#7c4dff', '%');
+  drawGauge('g3', 'g3-lbl', 85,  100,  '#4caf50', '%');
+  drawGauge('g4', 'g4-lbl', 98,  100,  '#00bcd4', '%');
+}, 300);
+</script>
+</body>
+</html>

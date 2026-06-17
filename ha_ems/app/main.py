@@ -648,12 +648,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </style>
 </head>
 <body>
-<h1><span class="dot"></span> HA EMS</h1>
-
 <nav>
   <div style="display:flex;gap:.5rem">
     <button class="nav-btn active" onclick="showPage('dashboard',this)">Dashboard</button>
-    <button class="nav-btn" onclick="showPage('energy',this)">Energy &#9889;</button>
+    <button class="nav-btn" onclick="showPage('energy',this)">Energy</button>
   </div>
   <button class="nav-btn nav-settings" id="btn-settings" onclick="showPage('settings',this)" title="Settings">&#x270E;</button>
 </nav>
