@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.30
+
+### Changed
+- **Graphes au thème Home Assistant** : les couleurs (texte des axes, légendes,
+  grilles) sont désormais reprises des variables de thème HA via les valeurs par
+  défaut de Chart.js, au lieu de gris codés en dur. Les graphes s'adaptent au
+  mode clair/sombre et aux thèmes personnalisés.
+
 ## 0.5.29
 
 ### Changed

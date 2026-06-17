@@ -1040,6 +1040,18 @@ const BASE = window.location.pathname.replace(/[\/]+$/, "");
   } catch(e) {}
 })();
 
+// Apply the (HA) theme colours to all Chart.js charts, so graphs match the
+// dashboard in both light and dark mode instead of using hard-coded greys.
+(function(){
+  if (typeof Chart === 'undefined') return;
+  const css = getComputedStyle(document.documentElement);
+  const muted  = css.getPropertyValue('--muted').trim()  || '#6b7280';
+  const border = css.getPropertyValue('--border').trim() || 'rgba(128,128,128,0.2)';
+  Chart.defaults.color = muted;          // tick labels + legend text
+  Chart.defaults.borderColor = border;   // grid lines + axis borders
+  Chart.defaults.font.family = 'system-ui, -apple-system, sans-serif';
+})();
+
 let _epexData = null, _epexChartInst = null, _epexDay = 'today';
 
 function showPage(name) {
@@ -1576,10 +1588,10 @@ function renderForecast(d) {
       ]},
       options:{
         responsive:true, maintainAspectRatio:false, animation:{duration:400},
-        plugins:{ legend:{labels:{color:'#9ca3af',font:{size:10},boxWidth:10,usePointStyle:true}},
+        plugins:{ legend:{labels:{font:{size:10},boxWidth:10,usePointStyle:true}},
                   tooltip:{mode:'index',intersect:false,callbacks:{label:c=>` ${c.dataset.label}: ${c.parsed.y.toFixed(2)} kW`}} },
-        scales:{ x:{ticks:{color:'#6b7280',maxTicksLimit:12,font:{size:9}},grid:{display:false}},
-                 y:{beginAtZero:true,ticks:{color:'#6b7280',font:{size:9},callback:v=>v+' kW'},grid:{color:'rgba(128,128,128,0.1)'}} }
+        scales:{ x:{ticks:{maxTicksLimit:12,font:{size:9}},grid:{display:false}},
+                 y:{beginAtZero:true,ticks:{font:{size:9},callback:v=>v+' kW'}} }
       }
     });
   }
@@ -1760,11 +1772,11 @@ function renderKwhChart(data) {
     type:'bar', data:{labels,datasets},
     options:{
       responsive:true, maintainAspectRatio:false, animation:{duration:400},
-      plugins:{ legend:{display:true,labels:{color:'#9ca3af',font:{size:10}}},
+      plugins:{ legend:{display:true,labels:{font:{size:10}}},
                 tooltip:{callbacks:{label:c=>` ${c.dataset.label}: ${Math.abs(c.parsed.y).toFixed(3)} kWh`}} },
       scales:{
-        x:{stacked:true,ticks:{color:'#6b7280',maxTicksLimit:12,font:{size:9}},grid:{display:false}},
-        y:{stacked:true,ticks:{color:'#6b7280',font:{size:9},callback:v=>v.toFixed(2)+' kWh'},grid:{color:'rgba(55,65,81,0.5)'}}
+        x:{stacked:true,ticks:{maxTicksLimit:12,font:{size:9}},grid:{display:false}},
+        y:{stacked:true,ticks:{font:{size:9},callback:v=>v.toFixed(2)+' kWh'}}
       }
     }
   });
@@ -1802,11 +1814,11 @@ function renderPriceChart(data) {
     ]},
     options:{
       responsive:true, maintainAspectRatio:false, animation:{duration:400},
-      plugins:{ legend:{display:true,labels:{color:'#9ca3af',font:{size:10}}},
+      plugins:{ legend:{display:true,labels:{font:{size:10}}},
                 tooltip:{callbacks:{label:c=>` ${c.dataset.label}: ${Math.abs(c.parsed.y).toFixed(4)} €`}} },
       scales:{
-        x:{stacked:true,ticks:{color:'#6b7280',maxTicksLimit:12,font:{size:9}},grid:{display:false}},
-        y:{stacked:true,ticks:{color:'#6b7280',font:{size:9},callback:v=>v.toFixed(3)+' €'},grid:{color:'rgba(55,65,81,0.5)'}}
+        x:{stacked:true,ticks:{maxTicksLimit:12,font:{size:9}},grid:{display:false}},
+        y:{stacked:true,ticks:{font:{size:9},callback:v=>v.toFixed(3)+' €'}}
       }
     }
   });
