@@ -6,7 +6,7 @@ ENERGY_HTML = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Energy — HA EMS</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="chart.js"></script>
 <style>
   :root {
     --bg:#111827;--card:#1f2937;--border:#374151;

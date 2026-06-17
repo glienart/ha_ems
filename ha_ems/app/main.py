@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from . import ha_client, settings as settings_module
@@ -331,6 +331,11 @@ async def api_state():
     return JSONResponse(_last_state)
 
 
+@app.get("/chart.js")
+async def serve_chartjs():
+    return FileResponse("/app/chart.umd.min.js", media_type="application/javascript")
+
+
 @app.get("/api/epex")
 async def api_epex():
     return JSONResponse(_epex_data or {"error": "No EPEX data -- check token and zone in settings"})
@@ -534,7 +539,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Home Energy Management System</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="chart.js"></script>
 <style>
   :root {
     --bg:#f3f4f6;--card:#ffffff;--border:#e5e7eb;
