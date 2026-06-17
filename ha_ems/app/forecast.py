@@ -1,5 +1,5 @@
 """
-Solar production forecast and consumption history for HA EMS v0.5.8.
+Solar production forecast and consumption history for HA EMS v0.5.24.
 
 Solar forecast: Forecast.Solar API (free, no API key required).
   GET https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}
@@ -10,12 +10,15 @@ Consumption history: in-memory rolling buffer, per-hour-of-week average.
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 from collections import defaultdict
 from datetime import datetime, timedelta
 
 _LOGGER = logging.getLogger(__name__)
 FORECAST_SOLAR_BASE = "https://api.forecast.solar/estimate"
+CONSUMPTION_PATH = "/data/consumption_history.json"
 
 
 async def fetch_solar_forecast(
@@ -65,10 +68,39 @@ class ConsumptionHistory:
     Computes per-hour-of-week average for the forecasting window.
     """
 
-    def __init__(self, max_days: int = 7):
+    def __init__(self, max_days: int = 7, path: str = CONSUMPTION_PATH):
         self._max_days = max_days
+        self._path = path
         # hour_of_week (0..167) -> list[(epoch_float, watts)]
         self._data: dict[int, list] = defaultdict(list)
+        self._load()
+
+    # ── Persistence ───────────────────────────────────────────────────────────
+
+    def _load(self) -> None:
+        if not self._path or not os.path.exists(self._path):
+            return
+        try:
+            with open(self._path) as f:
+                raw = json.load(f)
+            for k, entries in raw.items():
+                # JSON keys are strings; convert back to int hour-of-week
+                self._data[int(k)] = [(float(e), float(w)) for e, w in entries]
+            _LOGGER.info("Consumption history loaded: %d buckets",
+                         sum(len(v) for v in self._data.values()))
+        except Exception as exc:
+            _LOGGER.error("Failed to load consumption history: %s", exc)
+            self._data = defaultdict(list)
+
+    def save(self) -> None:
+        if not self._path:
+            return
+        try:
+            data = {str(k): v for k, v in self._data.items() if v}
+            with open(self._path, "w") as f:
+                json.dump(data, f)
+        except Exception as exc:
+            _LOGGER.error("Failed to save consumption history: %s", exc)
 
     def record(self, ts: datetime, watts: float) -> None:
         """Record a consumption reading."""

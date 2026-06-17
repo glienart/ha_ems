@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from collections import defaultdict
 from datetime import datetime
 from typing import Optional
@@ -18,12 +19,14 @@ _LOGGER = logging.getLogger(__name__)
 
 LOG_PATH = "/data/energy_log.json"
 MAX_BUCKETS = 24 * 365 * 3  # ~3 years of hourly data
+SAVE_INTERVAL_S = 300       # write to disk at most once every 5 min
 
 
 class EnergyLogger:
     def __init__(self) -> None:
         self._data: dict[str, dict] = {}
         self._dirty = False
+        self._last_save = 0.0
         self._load()
 
     # ── Persistence ──────────────────────────────────────────────────────────
@@ -46,8 +49,20 @@ class EnergyLogger:
         try:
             with open(LOG_PATH, "w") as f:
                 json.dump(self._data, f)
+            self._dirty = False
+            self._last_save = time.monotonic()
         except Exception as exc:
             _LOGGER.error("Failed to save energy log: %s", exc)
+
+    def _maybe_save(self) -> None:
+        """Write to disk only if the throttle window has elapsed."""
+        if time.monotonic() - self._last_save >= SAVE_INTERVAL_S:
+            self._save()
+
+    def flush(self) -> None:
+        """Force a write to disk if there are unsaved changes."""
+        if self._dirty:
+            self._save()
 
     # ── Recording ─────────────────────────────────────────────────────────────
 
@@ -83,7 +98,8 @@ class EnergyLogger:
         if house_w is not None and house_w > 0:
             b["kwh_house"] = b.get("kwh_house", 0.0) + house_w * interval_s / 3_600_000.0
 
-        self._save()
+        self._dirty = True
+        self._maybe_save()
 
     # ── Aggregation ───────────────────────────────────────────────────────────
 

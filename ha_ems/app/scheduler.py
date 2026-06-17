@@ -1,5 +1,5 @@
 """
-24h battery schedule optimizer for HA EMS v0.5.8.
+24h battery schedule optimizer for HA EMS v0.5.24.
 
 Given solar / consumption forecasts and EPEX day-ahead prices,
 produces a per-hour battery action plan that minimises grid cost.
@@ -176,11 +176,20 @@ def current_scheduled_action(schedule: list, now: datetime) -> Optional[Schedule
 
 
 def _price_at(prices: list, dt: datetime) -> Optional[float]:
-    """Find the effective price list entry covering local naive datetime dt."""
+    """Find the effective price list entry covering datetime dt.
+
+    `dt` is a naive *local* datetime (from datetime.now()); EPEX price
+    boundaries are stored in UTC. We must convert local→UTC properly instead
+    of merely labelling the local time as UTC, otherwise prices are shifted by
+    the local UTC offset (1–2 h in Belgium) and misaligned with the slots.
+    """
     if not prices:
         return None
     try:
-        dt_utc = dt.replace(tzinfo=timezone.utc)
+        # astimezone() on a naive datetime interprets it as system local time
+        # (the add-on container TZ = the HA-configured timezone) and converts
+        # to UTC. If dt is already tz-aware this is still correct.
+        dt_utc = dt.astimezone(timezone.utc)
         for p in prices:
             start = datetime.fromisoformat(p["start"].replace("Z", "+00:00"))
             end   = datetime.fromisoformat(p["end"].replace("Z", "+00:00"))

@@ -62,6 +62,12 @@ async def lifespan(app: FastAPI):
         _epex_task.cancel()
     if _schedule_task:
         _schedule_task.cancel()
+    # Flush state to disk so nothing is lost on shutdown/restart
+    try:
+        _consumption_history.save()
+        _energy_logger.flush()
+    except Exception as exc:
+        _LOGGER.error("Shutdown flush error: %s", exc)
     _LOGGER.info("EMS loops stopped")
 
 
@@ -143,6 +149,8 @@ async def schedule_loop():
     while True:
         try:
             await rebuild_schedule()
+            _consumption_history.save()  # persist rolling history each cycle
+            _energy_logger.flush()       # ensure energy log is on disk
         except asyncio.CancelledError:
             break
         except Exception as exc:
@@ -338,7 +346,11 @@ async def serve_chartjs():
 
 @app.get("/api/epex")
 async def api_epex():
-    return JSONResponse(_epex_data or {"error": "No EPEX data -- check token and zone in settings"})
+    if not _epex_data:
+        return JSONResponse({"error": "No EPEX data -- check token and zone in settings"})
+    data = dict(_epex_data)
+    data["zone"] = _settings.epex_zone  # so the dashboard can show the active zone
+    return JSONResponse(data)
 
 
 @app.get("/api/energy/history")
@@ -462,7 +474,7 @@ class SettingsUpdate(BaseModel):
 
 @app.post("/api/settings")
 async def api_update_settings(body: SettingsUpdate):
-    global _settings
+    global _settings, _loop_task
     data = body.model_dump(exclude_none=True)
     if "evs" in data:
         _settings.evs = data.pop("evs")
@@ -472,7 +484,7 @@ async def api_update_settings(body: SettingsUpdate):
     settings_module.save_runtime(_settings)
     if _loop_task and "update_interval" in data:
         _loop_task.cancel()
-        asyncio.create_task(ems_loop())
+        _loop_task = asyncio.create_task(ems_loop())
     if any(k in data for k in ("panel_kwp","latitude","longitude","panel_tilt","panel_azimuth","battery_capacity_kwh")):
         asyncio.create_task(rebuild_schedule())
     await run_optimizer()
