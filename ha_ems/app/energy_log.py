@@ -72,16 +72,16 @@ class EnergyLogger:
         kwh = abs(grid_w) * interval_s / 3_600_000.0
 
         if grid_w > 0:
-            b["kwh_in"] += kwh
+            b["kwh_in"] = b.get("kwh_in", 0.0) + kwh
             if tariff_consumption is not None:
-                b["cost"] += kwh * tariff_consumption
+                b["cost"] = b.get("cost", 0.0) + kwh * tariff_consumption
         else:
-            b["kwh_out"] += kwh
+            b["kwh_out"] = b.get("kwh_out", 0.0) + kwh
             if tariff_injection is not None:
-                b["revenue"] += kwh * tariff_injection
+                b["revenue"] = b.get("revenue", 0.0) + kwh * tariff_injection
 
         if house_w is not None and house_w > 0:
-            b["kwh_house"] += house_w * interval_s / 3_600_000.0
+            b["kwh_house"] = b.get("kwh_house", 0.0) + house_w * interval_s / 3_600_000.0
 
         self._save()
 
