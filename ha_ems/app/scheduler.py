@@ -1,5 +1,5 @@
 """
-24h battery schedule optimizer for HA EMS v0.5.32.
+24h battery schedule optimizer for HA EMS v0.5.33.
 
 Given solar / consumption forecasts and EPEX day-ahead prices,
 produces a per-hour battery action plan that minimises grid cost.
@@ -78,13 +78,30 @@ def build_schedule(
             s.battery_action = "_solar"
             s.reason = f"Solar surplus {s.solar_forecast_w:.0f} W forecast"
 
-    non_solar = sorted(
-        [s for s in slots if s.battery_action != "_solar" and s.epex_buy_price is not None],
-        key=lambda s: s.epex_buy_price,
-    )
-    for slot in non_solar[:n_cheap_slots]:
-        slot.battery_action = "_cheap"
-        slot.reason = f"Cheap grid ({slot.epex_buy_price:.4f} €/kWh)"
+    # Only grid-charge the energy that the forecast solar will NOT provide, in the
+    # cheapest slots. If the day's solar surplus already fills the battery, skip
+    # grid-charging entirely — paying the grid at night is wasteful when free
+    # solar is coming. (Horizon is 24 h, so this includes the next solar day.)
+    total_solar_surplus_kwh = sum(s.net_solar_w for s in slots) / 1000.0
+    headroom_kwh = max(0.0, (battery_max_soc - battery_soc_pct) / 100.0 * float(battery_capacity_kwh))
+    grid_deficit_kwh = max(0.0, headroom_kwh - total_solar_surplus_kwh)
+    if grid_deficit_kwh > 0.1 and n_cheap_slots > 0:
+        non_solar = sorted(
+            [s for s in slots if s.battery_action != "_solar" and s.epex_buy_price is not None],
+            key=lambda s: s.epex_buy_price,
+        )
+        planned_kwh = 0.0
+        for slot in non_solar[:n_cheap_slots]:
+            if planned_kwh >= grid_deficit_kwh:
+                break
+            slot.battery_action = "_cheap"
+            slot.reason = f"Cheap grid ({slot.epex_buy_price:.4f} €/kWh) — solar shortfall"
+            planned_kwh += battery_max_charge_kw
+    else:
+        _LOGGER.info(
+            "Schedule: skipping grid charge — forecast solar surplus %.1f kWh covers headroom %.1f kWh",
+            total_solar_surplus_kwh, headroom_kwh,
+        )
 
     discharge_cands = sorted(
         [

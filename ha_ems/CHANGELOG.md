@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.33
+
+### Changed
+- **Planificateur — fin des charges réseau inutiles la nuit** : la charge depuis
+  le réseau dans les créneaux les moins chers est désormais limitée au **déficit**
+  d'énergie que la prévision solaire ne couvrira pas. Si le surplus solaire prévu
+  de la journée suffit à remplir la batterie, aucune charge réseau n'est planifiée
+  — inutile de payer le réseau la nuit quand le solaire gratuit arrive.
+
 ## 0.5.32
 
 ### Changed
