@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0
+
+### Changed
+- **Refonte en 3 onglets** : **Live** (tout en kW — mode, mesures, flux, graphe de
+  puissance), **Consumption** (kWh & € — graphes conso/coût + sélecteur de date),
+  **Analysis** (EPEX, prévisions 24h, plan batterie).
+- **Internationalisation (i18n)** : l'interface suit la langue configurée dans
+  Home Assistant quand elle est disponible (anglais et français fournis, base
+  anglaise par défaut, extensible). Détection via la langue du frontend HA.
+- Le sélecteur Heure/Jour/Année est désormais sur l'onglet **Consumption**.
+
+### À venir (étape 2)
+- kWh & € mesurés depuis de vrais **capteurs d'énergie** HA configurables
+  (réseau import/export, production, conso, **recharge VE**) au lieu d'être
+  calculés par intégration de la puissance — corrige la conso « linéaire ».
+- **Comparatif réel vs prévisionnel** + sélecteur de date sur Analysis.
+
 ## 0.5.33
 
 ### Changed

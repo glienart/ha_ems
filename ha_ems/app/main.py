@@ -717,8 +717,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <body>
 <nav>
   <div class="tabs">
-    <button class="nav-btn active" data-page="energy" onclick="showPage('energy')">Energy</button>
-    <button class="nav-btn" data-page="analyse" onclick="showPage('analyse')">Analyse</button>
+    <button class="nav-btn active" data-page="live" data-i18n="tab_live" onclick="showPage('live')">Live</button>
+    <button class="nav-btn" data-page="consumption" data-i18n="tab_consumption" onclick="showPage('consumption')">Consumption</button>
+    <button class="nav-btn" data-page="analysis" data-i18n="tab_analysis" onclick="showPage('analysis')">Analysis</button>
   </div>
   <button class="nav-btn nav-settings" data-page="settings" id="btn-settings" onclick="showPage('settings')" title="Settings">&#x270E;</button>
 </nav>
@@ -843,9 +844,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 </div>
 
-<!-- ENERGY PAGE (operational: mode + live + flow + history) -->
-<div id="page-energy" class="page active">
-  <div class="section-title">Mode</div>
+<!-- LIVE PAGE (everything in kW: mode + live readings + flow + power chart) -->
+<div id="page-live" class="page active">
+  <div class="section-title" data-i18n="mode">Mode</div>
   <div class="mode-bar" id="modeBar">
     <button class="mode-btn" data-mode="auto">Auto</button>
     <button class="mode-btn" data-mode="eco">Eco</button>
@@ -853,7 +854,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <button class="mode-btn" data-mode="manual">Manual</button>
     <button class="mode-btn" data-mode="off">Off</button>
   </div>
-  <div class="section-title">Live readings</div>
+  <div class="section-title" data-i18n="live_readings">Live readings</div>
   <div class="grid">
     <div class="card"><div class="card-label">Solar</div><div class="card-value" id="solar">--</div><div class="card-sub">W production</div></div>
     <div class="card"><div class="card-label">Grid</div><div class="card-value" id="grid">--</div><div class="card-sub">W (+ import)</div></div>
@@ -862,12 +863,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div id="ev-soc-cards" style="display:contents"></div>
     <div class="card"><div class="card-label">Buy price</div><div class="card-value" id="tariff">--</div><div class="card-sub" id="tariff-sell-sub">&#8364;/kWh</div></div>
   </div>
-  <div class="section-title">Decisions</div>
+  <div class="section-title" data-i18n="decisions">Decisions</div>
   <div class="grid">
     <div class="card"><div class="card-label">Battery</div><div id="batDecision"><span class="badge badge-gray">--</span></div></div>
     <div id="ev-decision-cards" style="display:contents"></div>
   </div>
-  <div class="reason-card"><div class="card-label">Last decision reason</div><p id="reason">--</p></div>
+  <div class="reason-card"><div class="card-label" data-i18n="last_reason">Last decision reason</div><p id="reason">--</p></div>
   <!-- Flow + Chart -->
   <div class="flow-chart-grid">
     <div class="card">
@@ -929,16 +930,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Consommation & Coût (history) -->
-  <div class="section-title" style="margin-top:.75rem">Consommation &amp; Co&ucirc;t</div>
+  <div class="updated" id="updated"></div>
+</div>
+
+<!-- CONSUMPTION PAGE (energy in kWh & cost in €) -->
+<div id="page-consumption" class="page">
+  <div class="section-title" data-i18n="consumption_cost">Consumption &amp; Cost</div>
   <div class="dual-grid">
     <div class="card">
-      <div class="card-label" style="margin-bottom:.5rem">Consommation (kWh)</div>
+      <div class="card-label" style="margin-bottom:.5rem" data-i18n="consumption_kwh">Consumption (kWh)</div>
       <div class="chart-wrap" style="height:320px"><canvas id="kwhChart"></canvas></div>
       <div class="updated" id="kwh-updated"></div>
     </div>
     <div class="card">
-      <div class="card-label" style="margin-bottom:.5rem">Prix pay&eacute; (&euro;)</div>
+      <div class="card-label" style="margin-bottom:.5rem" data-i18n="price_paid">Price paid (€)</div>
       <div class="chart-wrap" style="height:320px"><canvas id="priceChart"></canvas></div>
       <div class="updated" id="price-updated"></div>
     </div>
@@ -946,22 +951,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <!-- Global history filter — drives both charts above -->
   <div class="hist-controls">
     <div class="day-toggle">
-      <button class="day-btn active" data-period="hourly"  onclick="setHistPeriod('hourly',this)">Heure</button>
-      <button class="day-btn"        data-period="daily"   onclick="setHistPeriod('daily',this)">Jour</button>
-      <button class="day-btn"        data-period="monthly" onclick="setHistPeriod('monthly',this)">Année</button>
+      <button class="day-btn active" data-period="hourly"  data-i18n="p_hour" onclick="setHistPeriod('hourly',this)">Hour</button>
+      <button class="day-btn"        data-period="daily"   data-i18n="p_day"  onclick="setHistPeriod('daily',this)">Day</button>
+      <button class="day-btn"        data-period="monthly" data-i18n="p_year" onclick="setHistPeriod('monthly',this)">Year</button>
     </div>
     <div class="hist-nav">
-      <button class="day-btn" onclick="stepHist(-1)" title="Précédent">&#8249;</button>
+      <button class="day-btn" onclick="stepHist(-1)" title="Previous">&#8249;</button>
       <input type="date" id="histDate" class="hist-date" onchange="loadEnergyHistory()">
-      <button class="day-btn" onclick="stepHist(1)" title="Suivant">&#8250;</button>
+      <button class="day-btn" onclick="stepHist(1)" title="Next">&#8250;</button>
     </div>
   </div>
-  <div class="updated" id="updated"></div>
 </div>
 
-<!-- ANALYSE PAGE (EPEX market + 24h battery plan) -->
-<div id="page-analyse" class="page">
-  <div class="section-title">EPEX SPOT prices</div>
+<!-- ANALYSIS PAGE (EPEX market + 24h forecast + battery plan) -->
+<div id="page-analysis" class="page">
+  <div class="section-title" data-i18n="epex_prices">EPEX SPOT prices</div>
   <div class="energy-layout">
     <div>
       <div class="card" style="margin-bottom:.75rem">
@@ -1000,13 +1004,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 
   <!-- 24h forecast chart (solar + consumption) -->
-  <div class="section-title" style="margin-top:.75rem">Pr&eacute;visions 24h <span id="fc-calib" style="font-size:.7rem;font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0"></span></div>
+  <div class="section-title" style="margin-top:.75rem"><span data-i18n="forecast_24h">24h forecast</span> <span id="fc-calib" style="font-size:.7rem;font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0"></span></div>
   <div class="card">
     <div class="chart-wrap" style="height:200px"><canvas id="forecastChart"></canvas></div>
   </div>
 
   <!-- 24h optimized battery plan (from /api/forecast) -->
-  <div class="section-title" style="margin-top:.75rem">Plan batterie 24h <span id="plan-status" style="font-size:.7rem;font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0"></span></div>
+  <div class="section-title" style="margin-top:.75rem"><span data-i18n="battery_plan">24h battery plan</span> <span id="plan-status" style="font-size:.7rem;font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0"></span></div>
   <div class="card">
     <div id="plan-empty" class="no-epex" style="display:none">
       Aucun plan disponible &mdash; n&eacute;cessite les prix EPEX et la configuration panneaux/batterie.
@@ -1052,11 +1056,42 @@ const BASE = window.location.pathname.replace(/[\/]+$/, "");
   Chart.defaults.font.family = 'system-ui, -apple-system, sans-serif';
 })();
 
+// ── i18n: follow Home Assistant's language when possible (en + fr provided, extensible) ──
+const I18N = {
+  en: { tab_live:'Live', tab_consumption:'Consumption', tab_analysis:'Analysis',
+        mode:'Mode', live_readings:'Live readings', decisions:'Decisions', last_reason:'Last decision reason',
+        consumption_cost:'Consumption & Cost', consumption_kwh:'Consumption (kWh)', price_paid:'Price paid (€)',
+        p_hour:'Hour', p_day:'Day', p_year:'Year',
+        epex_prices:'EPEX SPOT prices', forecast_24h:'24h forecast', battery_plan:'24h battery plan',
+        self_solar:'Solar self-use', imported:'Imported (kWh)', exported:'Exported (kWh)', cost:'Cost (€)', revenue:'Revenue (€)',
+        fc_solar:'Forecast solar (kW)', fc_conso:'Forecast consumption (kW)',
+        act_charge:'Charge', act_discharge:'Discharge', act_idle:'Idle',
+        updated:'updated', solar_fc_on:'solar forecast', solar_fc_off:'no solar forecast',
+        hist_ok:'consumption history OK', hist_default:'default consumption',
+        calib_learn:'solar calibration learning…', calib_home:'home calibration', calib_hours:'h learned',
+        bars:'bars', error:'Error' },
+  fr: { tab_live:'Live', tab_consumption:'Consommation', tab_analysis:'Analyse',
+        mode:'Mode', live_readings:'Mesures en direct', decisions:'Décisions', last_reason:'Dernière décision',
+        consumption_cost:'Consommation & Coût', consumption_kwh:'Consommation (kWh)', price_paid:'Prix payé (€)',
+        p_hour:'Heure', p_day:'Jour', p_year:'Année',
+        epex_prices:'Prix EPEX SPOT', forecast_24h:'Prévisions 24h', battery_plan:'Plan batterie 24h',
+        self_solar:'Autoconso. solaire', imported:'Importé (kWh)', exported:'Exporté (kWh)', cost:'Coût (€)', revenue:'Revenu (€)',
+        fc_solar:'Solaire prévu (kW)', fc_conso:'Conso prévue (kW)',
+        act_charge:'Charge', act_discharge:'Décharge', act_idle:'Repos',
+        updated:'màj', solar_fc_on:'prévision solaire', solar_fc_off:'sans prévision solaire',
+        hist_ok:'historique conso OK', hist_default:'conso par défaut',
+        calib_learn:'calibration solaire en apprentissage…', calib_home:'calibration maison', calib_hours:'h apprises',
+        bars:'barres', error:'Erreur' },
+};
+const LANG = (function(){ try { const l=(window.parent.document.documentElement.lang||navigator.language||'en').slice(0,2).toLowerCase(); return I18N[l]?l:'en'; } catch(e){ return 'en'; } })();
+function t(k){ return (I18N[LANG] && I18N[LANG][k]) || I18N.en[k] || k; }
+function applyI18n(){ document.querySelectorAll('[data-i18n]').forEach(function(el){ const v=t(el.getAttribute('data-i18n')); if(v) el.textContent=v; }); }
+
 let _epexData = null, _epexChartInst = null, _epexDay = 'today';
 
 function showPage(name) {
-  const valid = { energy: 1, analyse: 1, settings: 1 };
-  if (!valid[name]) name = "energy";
+  const valid = { live: 1, consumption: 1, analysis: 1, settings: 1 };
+  if (!valid[name]) name = "live";
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
   document.querySelectorAll(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.page === name));
   const pg = document.getElementById("page-" + name);
@@ -1064,8 +1099,9 @@ function showPage(name) {
   // Keep the page in the URL hash so a refresh lands on the same tab.
   if (location.hash !== "#" + name) location.hash = name;
   if (name === "settings") loadSettings();
-  if (name === "energy") { loadPowerChart(); loadEnergyHistory(); }
-  if (name === "analyse") { if (!_epexData) loadEpex(); loadForecast(); }
+  if (name === "live") loadPowerChart();
+  if (name === "consumption") loadEnergyHistory();
+  if (name === "analysis") { if (!_epexData) loadEpex(); loadForecast(); }
 }
 window.addEventListener("hashchange", () => showPage((location.hash || "").replace("#", "")));
 
@@ -1534,7 +1570,7 @@ setInterval(()=>{ if(_epexData) renderEpex(); }, 60*1000);
 setInterval(loadEpex, 15*60*1000);
 
 // ── 24h optimized battery plan (/api/forecast) ──
-const PLAN_MAP = {charge:{cls:"green",label:"Charge"},discharge:{cls:"yellow",label:"Décharge"},idle:{cls:"gray",label:"Repos"}};
+const PLAN_MAP = {charge:{cls:"green",label:t('act_charge')},discharge:{cls:"yellow",label:t('act_discharge')},idle:{cls:"gray",label:t('act_idle')}};
 let _forecastChartInst = null;
 async function loadForecast() {
   try { renderForecast(await fetch(BASE+'/api/forecast').then(r=>r.json())); }
@@ -1568,9 +1604,9 @@ function renderForecast(d) {
   }).join('');
   if (status) {
     const bits = [];
-    if (d.built_at) bits.push('màj '+new Date(d.built_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));
-    bits.push(d.has_solar_forecast ? '☀ prévision solaire' : 'sans prévision solaire');
-    bits.push(d.has_history ? 'historique conso OK' : 'conso par défaut');
+    if (d.built_at) bits.push(t('updated')+' '+new Date(d.built_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));
+    bits.push(d.has_solar_forecast ? '☀ '+t('solar_fc_on') : t('solar_fc_off'));
+    bits.push(d.has_history ? t('hist_ok') : t('hist_default'));
     status.textContent = '· ' + bits.join(' · ');
   }
   // Solar/consumption forecast chart
@@ -1583,8 +1619,8 @@ function renderForecast(d) {
     _forecastChartInst = new Chart(fcCtx.getContext('2d'), {
       type:'line',
       data:{labels:flabels,datasets:[
-        {label:'Solaire prévu (kW)', data:fsolar, borderColor:'rgb(255,152,0)', backgroundColor:'rgba(255,152,0,0.15)', fill:true,  tension:0.4, pointRadius:0, borderWidth:1.5},
-        {label:'Conso prévue (kW)',  data:fconso, borderColor:'rgb(120,120,120)', backgroundColor:'rgba(120,120,120,0.08)', fill:false, tension:0.4, pointRadius:0, borderWidth:1.5, borderDash:[5,3]},
+        {label:t('fc_solar'), data:fsolar, borderColor:'rgb(255,152,0)', backgroundColor:'rgba(255,152,0,0.15)', fill:true,  tension:0.4, pointRadius:0, borderWidth:1.5},
+        {label:t('fc_conso'), data:fconso, borderColor:'rgb(120,120,120)', backgroundColor:'rgba(120,120,120,0.08)', fill:false, tension:0.4, pointRadius:0, borderWidth:1.5, borderDash:[5,3]},
       ]},
       options:{
         responsive:true, maintainAspectRatio:false, animation:{duration:400},
@@ -1599,13 +1635,13 @@ function renderForecast(d) {
   if (fcCalib) {
     const c = d.solar_calibration;
     fcCalib.textContent = (c && c.hours_learned > 0)
-      ? '· calibration maison ×' + c.mean_factor + ' (' + c.hours_learned + ' h apprises)'
-      : '· calibration solaire en apprentissage…';
+      ? '· ' + t('calib_home') + ' ×' + c.mean_factor + ' (' + c.hours_learned + ' ' + t('calib_hours') + ')'
+      : '· ' + t('calib_learn');
   }
   const cur = body.querySelector('tr.cur');
   if (cur) setTimeout(function(){ cur.scrollIntoView({block:'nearest'}); }, 100);
 }
-setInterval(function(){ if(document.getElementById('page-analyse').classList.contains('active')) loadForecast(); }, 5*60*1000);
+setInterval(function(){ if(document.getElementById('page-analysis').classList.contains('active')) loadForecast(); }, 5*60*1000);
 
 // POWER HISTORY CHART
 let _powerChart = null;
@@ -1740,7 +1776,7 @@ async function loadEnergyHistory() {
   try {
     const data = await fetch(BASE+'/api/energy/history?period='+_histPeriod+'&date='+_histDate).then(r=>r.json());
     renderKwhChart(data); renderPriceChart(data);
-  } catch(e) { const el=document.getElementById('kwh-updated'); if(el) el.textContent='Erreur'; }
+  } catch(e) { const el=document.getElementById('kwh-updated'); if(el) el.textContent=t('error'); }
 }
 function setHistPeriod(period, btn) {
   _histPeriod = period;
@@ -1772,13 +1808,13 @@ function renderKwhChart(data) {
   if (_kwhChartInst) _kwhChartInst.destroy();
   const datasets = hasHouse
     ? [
-        { label:'Autoconso. solaire', data:selfSolar, backgroundColor:'rgba(245,158,11,0.8)', borderRadius:2, stack:'e' },
-        { label:'Importé (kWh)',      data:imported,  backgroundColor:'rgba(124,77,255,0.7)', borderRadius:2, stack:'e' },
-        { label:'Exporté (kWh)',      data:negExport, backgroundColor:'rgba(16,185,129,0.7)', borderRadius:2, stack:'e' },
+        { label:t('self_solar'), data:selfSolar, backgroundColor:'rgba(245,158,11,0.8)', borderRadius:2, stack:'e' },
+        { label:t('imported'),   data:imported,  backgroundColor:'rgba(124,77,255,0.7)', borderRadius:2, stack:'e' },
+        { label:t('exported'),   data:negExport, backgroundColor:'rgba(16,185,129,0.7)', borderRadius:2, stack:'e' },
       ]
     : [
-        { label:'Importé (kWh)', data:imported,  backgroundColor:'rgba(124,77,255,0.75)', borderRadius:2, stack:'e' },
-        { label:'Exporté (kWh)', data:negExport,  backgroundColor:'rgba(16,185,129,0.75)', borderRadius:2, stack:'e' },
+        { label:t('imported'), data:imported,  backgroundColor:'rgba(124,77,255,0.75)', borderRadius:2, stack:'e' },
+        { label:t('exported'), data:negExport,  backgroundColor:'rgba(16,185,129,0.75)', borderRadius:2, stack:'e' },
       ];
   _kwhChartInst = new Chart(ctx, {
     type:'bar', data:{labels,datasets},
@@ -1793,7 +1829,7 @@ function renderKwhChart(data) {
     }
   });
   const el = document.getElementById('kwh-updated');
-  if (el) { const t=data.totals; el.textContent=data.items.length+' barres · '+(t.kwh_house>0?'conso '+t.kwh_house.toFixed(2)+' kWh':'import '+t.kwh_in.toFixed(2)+' kWh'); }
+  if (el) { const tot=data.totals; el.textContent=data.items.length+' '+t('bars')+' · '+(tot.kwh_house>0?tot.kwh_house.toFixed(2)+' kWh':tot.kwh_in.toFixed(2)+' kWh'); }
 }
 
 // ── Prix payé (rendered together with the kWh chart by loadEnergyHistory) ──
@@ -1808,8 +1844,8 @@ function renderPriceChart(data) {
   _priceChartInst = new Chart(ctx, {
     type:'bar',
     data:{labels,datasets:[
-      {label:'Revenu (€)', data:revenues, backgroundColor:'rgba(16,185,129,0.75)', borderRadius:2, stack:'p'},
-      {label:'Coût (€)',   data:negCosts, backgroundColor:'rgba(239,68,68,0.75)',  borderRadius:2, stack:'p'},
+      {label:t('revenue'), data:revenues, backgroundColor:'rgba(16,185,129,0.75)', borderRadius:2, stack:'p'},
+      {label:t('cost'),    data:negCosts, backgroundColor:'rgba(239,68,68,0.75)',  borderRadius:2, stack:'p'},
     ]},
     options:{
       responsive:true, maintainAspectRatio:false, animation:{duration:400},
@@ -1822,12 +1858,13 @@ function renderPriceChart(data) {
     }
   });
   const el = document.getElementById('price-updated');
-  if (el) { const net=data.totals.net_cost; el.textContent=data.items.length+' barres · net '+(net>=0?'':'-')+Math.abs(net).toFixed(2)+' €'; }
+  if (el) { const net=data.totals.net_cost; el.textContent=data.items.length+' '+t('bars')+' · net '+(net>=0?'':'-')+Math.abs(net).toFixed(2)+' €'; }
 }
-setInterval(()=>{ if(document.getElementById('page-energy').classList.contains('active')) loadEnergyHistory(); }, 60000);
+setInterval(()=>{ if(document.getElementById('page-consumption').classList.contains('active')) loadEnergyHistory(); }, 60000);
 
 // Initial route from the URL hash (so a refresh restores the current tab).
-showPage((location.hash || "").replace("#", "") || "energy");
+applyI18n();
+showPage((location.hash || "").replace("#", "") || "live");
 </script>
 </body>
 </html>
