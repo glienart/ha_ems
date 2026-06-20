@@ -3,7 +3,8 @@ Energy cost logger — accumulates kWh imported/exported and cost/revenue
 into hourly buckets stored in /data/energy_log.json.
 
 Bucket key format: "YYYY-MM-DDTHH"  (local time)
-Each bucket: { kwh_in, kwh_out, cost, revenue }
+Each bucket: { kwh_in, kwh_out, kwh_house, kwh_solar, kwh_bat_charge,
+               kwh_bat_discharge, cost, revenue }  (HA EMS v0.6.1)
 """
 from __future__ import annotations
 
@@ -20,6 +21,11 @@ _LOGGER = logging.getLogger(__name__)
 LOG_PATH = "/data/energy_log.json"
 MAX_BUCKETS = 24 * 365 * 3  # ~3 years of hourly data
 SAVE_INTERVAL_S = 300       # write to disk at most once every 5 min
+
+# Energy fields tracked per hourly bucket (kWh) + money fields (€).
+KWH_KEYS = ("kwh_in", "kwh_out", "kwh_house", "kwh_solar",
+            "kwh_bat_charge", "kwh_bat_discharge")
+ALL_KEYS = KWH_KEYS + ("cost", "revenue")
 
 
 class EnergyLogger:
@@ -101,6 +107,23 @@ class EnergyLogger:
         self._dirty = True
         self._maybe_save()
 
+    def record_energy(self, deltas: dict) -> None:
+        """Accumulate pre-computed per-interval energy deltas (kWh) and
+        cost/revenue (€) into the current hourly bucket.
+
+        The caller computes deltas from real kWh meters when configured, else
+        by integrating the matching power sensor. Cost/revenue come from the
+        EPEX-based effective tariffs.
+        """
+        key = datetime.now().strftime("%Y-%m-%dT%H")
+        b = self._data.setdefault(key, {k: 0.0 for k in ALL_KEYS})
+        for k in ALL_KEYS:
+            v = deltas.get(k)
+            if v:
+                b[k] = b.get(k, 0.0) + v
+        self._dirty = True
+        self._maybe_save()
+
     # ── Aggregation ───────────────────────────────────────────────────────────
 
     def get_history(self, period: str = "hourly", date: str | None = None) -> dict:
@@ -120,9 +143,7 @@ class EnergyLogger:
             period = "hourly"
         anchor = date or datetime.now().strftime("%Y-%m-%d")  # YYYY-MM-DD
 
-        agg: dict[str, dict] = defaultdict(
-            lambda: {"kwh_in": 0.0, "kwh_out": 0.0, "kwh_house": 0.0, "cost": 0.0, "revenue": 0.0}
-        )
+        agg: dict[str, dict] = defaultdict(lambda: {k: 0.0 for k in ALL_KEYS})
 
         for key, bucket in self._data.items():
             # key: "YYYY-MM-DDTHH"
@@ -140,33 +161,22 @@ class EnergyLogger:
                     continue
                 agg_key = key[:7]                # "YYYY-MM"
 
-            for k in ("kwh_in", "kwh_out", "kwh_house", "cost", "revenue"):
+            for k in ALL_KEYS:
                 agg[agg_key][k] += bucket.get(k, 0.0)
 
-        sorted_keys = sorted(agg)
+        def _round(k, v):
+            return round(v, 4) if k in ("cost", "revenue") else round(v, 3)
 
         items = []
-        for k in sorted_keys:
+        for k in sorted(agg):
             d = agg[k]
-            items.append(
-                {
-                    "label": k,
-                    "kwh_in":    round(d["kwh_in"],    3),
-                    "kwh_out":   round(d["kwh_out"],   3),
-                    "kwh_house": round(d["kwh_house"], 3),
-                    "cost":      round(d["cost"],      4),
-                    "revenue":   round(d["revenue"],   4),
-                    "net_cost":  round(d["cost"] - d["revenue"], 4),
-                }
-            )
+            item = {"label": k}
+            for f in ALL_KEYS:
+                item[f] = _round(f, d[f])
+            item["net_cost"] = round(d["cost"] - d["revenue"], 4)
+            items.append(item)
 
-        totals = {
-            "kwh_in":    round(sum(i["kwh_in"]    for i in items), 3),
-            "kwh_out":   round(sum(i["kwh_out"]   for i in items), 3),
-            "kwh_house": round(sum(i["kwh_house"] for i in items), 3),
-            "cost":      round(sum(i["cost"]      for i in items), 4),
-            "revenue":   round(sum(i["revenue"]   for i in items), 4),
-        }
+        totals = {f: _round(f, sum(d[f] for d in agg.values())) for f in ALL_KEYS}
         totals["net_cost"] = round(totals["cost"] - totals["revenue"], 4)
 
         return {"period": period, "date": anchor, "items": items, "totals": totals}

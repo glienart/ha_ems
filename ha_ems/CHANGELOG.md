@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.1
+
+### Added
+- **Énergie depuis de vrais capteurs (kWh)** : nouveaux réglages « Energy meters
+  (kWh) » pour les compteurs réseau (import/export), solaire, maison et
+  charge/décharge batterie. L'add-on lit les compteurs cumulatifs et calcule les
+  deltas par intervalle (gestion des remises à zéro). Tout compteur laissé vide
+  retombe sur l'intégration du capteur de puissance correspondant.
+- **Récap en haut de Consumption** : totaux kWh **Réseau / Maison / Solaire /
+  Batterie** sur la période choisie (jour / mois / année).
+
+### Changed
+- Le **prix en €** reste calculé par l'add-on à partir du tarif EPEX effectif
+  (coût = kWh importés × tarif conso ; revenu = kWh exportés × tarif injection) —
+  aucun capteur de prix requis.
+
 ## 0.6.0
 
 ### Changed

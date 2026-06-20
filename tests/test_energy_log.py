@@ -80,3 +80,16 @@ def test_legacy_period_names_still_work(tmp_path):
     el.record(grid_w=1000, tariff_consumption=0.25, tariff_injection=0.05, interval_s=3600)
     # "today" maps to hourly anchored on today
     assert el.get_history("today")["period"] == "hourly"
+
+
+def test_record_energy_tracks_grid_house_solar_battery(tmp_path):
+    el = _logger(tmp_path)
+    el.record_energy({
+        "kwh_in": 1.0, "kwh_out": 0.5, "kwh_house": 2.0, "kwh_solar": 3.0,
+        "kwh_bat_charge": 1.5, "kwh_bat_discharge": 0.7, "cost": 0.25, "revenue": 0.03,
+    })
+    tt = el.get_history("hourly")["totals"]
+    assert tt["kwh_in"] == 1.0 and tt["kwh_out"] == 0.5
+    assert tt["kwh_house"] == 2.0 and tt["kwh_solar"] == 3.0
+    assert tt["kwh_bat_charge"] == 1.5 and tt["kwh_bat_discharge"] == 0.7
+    assert tt["net_cost"] == round(0.25 - 0.03, 4)

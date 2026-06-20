@@ -47,6 +47,7 @@ SOLAR_REFRESH_INTERVAL = timedelta(hours=6)
 _consumption_history: ConsumptionHistory = ConsumptionHistory()
 _solar_calib: SolarCalibration = SolarCalibration()
 _energy_logger: EnergyLogger = EnergyLogger()
+_meter_last: dict = {}   # role -> last cumulative kWh reading (for meter deltas)
 _schedule_task: Optional[asyncio.Task] = None
 
 
@@ -209,6 +210,25 @@ async def _publish_epex(data: dict) -> None:
              "prices_tomorrow": data.get("prices_tomorrow", [])})
 
 
+async def _read_meter(entity_id: str):
+    """Return a cumulative kWh meter reading, or None if not configured/unavailable."""
+    if not entity_id:
+        return None
+    val = await ha_client.get_float(entity_id, default=-1.0)
+    return val if val >= 0 else None
+
+
+def _meter_delta(role: str, current):
+    """Per-interval delta for a cumulative meter; handles first read and resets."""
+    if current is None:
+        return None
+    last = _meter_last.get(role)
+    _meter_last[role] = current
+    if last is None or current < last:   # first read or counter reset
+        return 0.0
+    return current - last
+
+
 async def run_optimizer():
     global _last_state
     s = _settings
@@ -252,7 +272,36 @@ async def run_optimizer():
     # Use house sensor directly; no calculation
     _eff_house = house_w if house_w is not None else None
 
-    _energy_logger.record(grid_w, effective_consumption, effective_injection, _settings.update_interval, house_w=_eff_house)
+    # ── Energy accounting (kWh): prefer real cumulative meters, fall back to
+    # integrating the matching power sensor. € is always computed from EPEX. ──
+    interval_s = s.update_interval
+
+    def _wh_to_kwh(w):
+        return max(0.0, w) * interval_s / 3_600_000.0 if w is not None else 0.0
+
+    m_in  = _meter_delta("grid_in",  await _read_meter(s.grid_import_energy_sensor))
+    m_out = _meter_delta("grid_out", await _read_meter(s.grid_export_energy_sensor))
+    m_sol = _meter_delta("solar",    await _read_meter(s.solar_energy_sensor))
+    m_hou = _meter_delta("house",    await _read_meter(s.house_energy_sensor))
+    m_bc  = _meter_delta("bat_chg",  await _read_meter(s.battery_charge_energy_sensor))
+    m_bd  = _meter_delta("bat_dis",  await _read_meter(s.battery_discharge_energy_sensor))
+
+    kwh_in  = m_in  if m_in  is not None else _wh_to_kwh(grid_w if grid_w and grid_w > 0 else 0.0)
+    kwh_out = m_out if m_out is not None else _wh_to_kwh(-grid_w if grid_w and grid_w < 0 else 0.0)
+    kwh_sol = m_sol if m_sol is not None else _wh_to_kwh(solar_w)
+    kwh_hou = m_hou if m_hou is not None else _wh_to_kwh(_eff_house)
+    # Solis convention: battery power < 0 = charging, > 0 = discharging
+    kwh_bc  = m_bc  if m_bc  is not None else _wh_to_kwh(-bat_power if bat_power and bat_power < 0 else 0.0)
+    kwh_bd  = m_bd  if m_bd  is not None else _wh_to_kwh(bat_power if bat_power and bat_power > 0 else 0.0)
+
+    cost    = kwh_in  * effective_consumption if effective_consumption is not None else 0.0
+    revenue = kwh_out * effective_injection   if effective_injection   is not None else 0.0
+
+    _energy_logger.record_energy({
+        "kwh_in": kwh_in, "kwh_out": kwh_out, "kwh_house": kwh_hou, "kwh_solar": kwh_sol,
+        "kwh_bat_charge": kwh_bc, "kwh_bat_discharge": kwh_bd,
+        "cost": cost, "revenue": revenue,
+    })
     if _eff_house is not None and _eff_house > 0:
         _consumption_history.record(datetime.now(), _eff_house)
 
@@ -474,6 +523,12 @@ class SettingsUpdate(BaseModel):
     house_power_sensor: Optional[str] = None
     battery_soc_sensor: Optional[str] = None
     battery_power_sensor: Optional[str] = None
+    grid_import_energy_sensor: Optional[str] = None
+    grid_export_energy_sensor: Optional[str] = None
+    solar_energy_sensor: Optional[str] = None
+    house_energy_sensor: Optional[str] = None
+    battery_charge_energy_sensor: Optional[str] = None
+    battery_discharge_energy_sensor: Optional[str] = None
     battery_charge_switch: Optional[str] = None
     battery_discharge_switch: Optional[str] = None
     battery_standby_switch: Optional[str] = None
@@ -746,6 +801,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
 
     <div class="settings-group">
+      <div class="sg-head"><h3>Energy meters (kWh)</h3><button class="pencil-btn" onclick="toggleEdit('sg-energy')" title="Edit">&#x270E;</button></div>
+      <div id="sg-energy-view">
+        <div class="sg-row"><span class="sg-key">Grid import</span><span id="v_grid_import_energy_sensor" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Grid export</span><span id="v_grid_export_energy_sensor" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Solar</span><span id="v_solar_energy_sensor" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">House</span><span id="v_house_energy_sensor" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Battery charge</span><span id="v_battery_charge_energy_sensor" class="sg-val">&#8212;</span></div>
+        <div class="sg-row"><span class="sg-key">Battery discharge</span><span id="v_battery_discharge_energy_sensor" class="sg-val">&#8212;</span></div>
+      </div>
+      <div id="sg-energy-edit" class="sg-edit" style="display:none">
+        <p style="font-size:.72rem;color:var(--muted);margin-bottom:.5rem">Cumulative kWh meters (total_increasing). Any left empty falls back to integrating the matching power sensor. Cost &amp; revenue in € are always computed from the EPEX tariff.</p>
+        <div class="field"><label>Grid import (kWh)</label><div class="combo"><input class="combo-input" id="s_grid_import_energy_sensor" placeholder="Search kWh sensor..." autocomplete="off"><ul class="combo-list" id="sl_grid_import_energy_sensor"></ul></div></div>
+        <div class="field"><label>Grid export (kWh)</label><div class="combo"><input class="combo-input" id="s_grid_export_energy_sensor" placeholder="Search kWh sensor..." autocomplete="off"><ul class="combo-list" id="sl_grid_export_energy_sensor"></ul></div></div>
+        <div class="field"><label>Solar production (kWh)</label><div class="combo"><input class="combo-input" id="s_solar_energy_sensor" placeholder="Search kWh sensor..." autocomplete="off"><ul class="combo-list" id="sl_solar_energy_sensor"></ul></div></div>
+        <div class="field"><label>House consumption (kWh)</label><div class="combo"><input class="combo-input" id="s_house_energy_sensor" placeholder="Search kWh sensor..." autocomplete="off"><ul class="combo-list" id="sl_house_energy_sensor"></ul></div></div>
+        <div class="field"><label>Battery charge (kWh)</label><div class="combo"><input class="combo-input" id="s_battery_charge_energy_sensor" placeholder="Search kWh sensor..." autocomplete="off"><ul class="combo-list" id="sl_battery_charge_energy_sensor"></ul></div></div>
+        <div class="field"><label>Battery discharge (kWh)</label><div class="combo"><input class="combo-input" id="s_battery_discharge_energy_sensor" placeholder="Search kWh sensor..." autocomplete="off"><ul class="combo-list" id="sl_battery_discharge_energy_sensor"></ul></div></div>
+        <button class="save-btn" onclick="saveGroup(['grid_import_energy_sensor','grid_export_energy_sensor','solar_energy_sensor','house_energy_sensor','battery_charge_energy_sensor','battery_discharge_energy_sensor'],'sg-energy')">Save</button>
+      </div>
+    </div>
+
+    <div class="settings-group">
       <div class="sg-head"><h3>Battery</h3><button class="pencil-btn" onclick="toggleEdit('sg-bat')" title="Edit">&#x270E;</button></div>
       <div id="sg-bat-view">
         <div class="sg-row"><span class="sg-key">SOC sensor</span><span id="v_battery_soc_sensor" class="sg-val">&#8212;</span></div>
@@ -935,6 +1012,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 <!-- CONSUMPTION PAGE (energy in kWh & cost in €) -->
 <div id="page-consumption" class="page">
+  <!-- Period totals (kWh) for the selected day/month/year -->
+  <div class="grid" style="margin-bottom:.75rem">
+    <div class="card"><div class="card-label" style="color:#488fc2" data-i18n="cs_grid">Grid</div><div class="card-value" id="cs-grid">--</div><div class="card-sub" id="cs-grid-sub">&#8593; --</div></div>
+    <div class="card"><div class="card-label" style="color:var(--accent)" data-i18n="cs_house">House</div><div class="card-value" id="cs-house">--</div><div class="card-sub" data-i18n="cs_consumed">consumed</div></div>
+    <div class="card"><div class="card-label" style="color:#ff9800" data-i18n="cs_solar">Solar</div><div class="card-value" id="cs-solar">--</div><div class="card-sub" data-i18n="cs_produced">produced</div></div>
+    <div class="card"><div class="card-label" style="color:#4db6ac" data-i18n="cs_battery">Battery</div><div class="card-value" id="cs-battery">--</div><div class="card-sub" id="cs-battery-sub">&#8593; --</div></div>
+  </div>
   <div class="section-title" data-i18n="consumption_cost">Consumption &amp; Cost</div>
   <div class="dual-grid">
     <div class="card">
@@ -1069,6 +1153,7 @@ const I18N = {
         updated:'updated', solar_fc_on:'solar forecast', solar_fc_off:'no solar forecast',
         hist_ok:'consumption history OK', hist_default:'default consumption',
         calib_learn:'solar calibration learning…', calib_home:'home calibration', calib_hours:'h learned',
+        cs_grid:'Grid', cs_house:'House', cs_solar:'Solar', cs_battery:'Battery', cs_consumed:'consumed', cs_produced:'produced',
         bars:'bars', error:'Error' },
   fr: { tab_live:'Live', tab_consumption:'Consommation', tab_analysis:'Analyse',
         mode:'Mode', live_readings:'Mesures en direct', decisions:'Décisions', last_reason:'Dernière décision',
@@ -1081,6 +1166,7 @@ const I18N = {
         updated:'màj', solar_fc_on:'prévision solaire', solar_fc_off:'sans prévision solaire',
         hist_ok:'historique conso OK', hist_default:'conso par défaut',
         calib_learn:'calibration solaire en apprentissage…', calib_home:'calibration maison', calib_hours:'h apprises',
+        cs_grid:'Réseau', cs_house:'Maison', cs_solar:'Solaire', cs_battery:'Batterie', cs_consumed:'consommé', cs_produced:'produit',
         bars:'barres', error:'Erreur' },
 };
 const LANG = (function(){ try { const l=(window.parent.document.documentElement.lang||navigator.language||'en').slice(0,2).toLowerCase(); return I18N[l]?l:'en'; } catch(e){ return 'en'; } })();
@@ -1205,6 +1291,12 @@ const FIELD_UNITS = {
   battery_power_sensor:      ['W','kW','watt','watts'],
   battery_soc_sensor:        ['%'],
   tariff_sensor:             ['EUR/kWh','€/kWh','$/kWh','USD/kWh','ct/kWh'],
+  grid_import_energy_sensor:      ['kWh','Wh','MWh'],
+  grid_export_energy_sensor:      ['kWh','Wh','MWh'],
+  solar_energy_sensor:            ['kWh','Wh','MWh'],
+  house_energy_sensor:            ['kWh','Wh','MWh'],
+  battery_charge_energy_sensor:   ['kWh','Wh','MWh'],
+  battery_discharge_energy_sensor:['kWh','Wh','MWh'],
 };
 const SWITCH_FIELDS = ['battery_charge_switch','battery_discharge_switch','battery_standby_switch'];
 const COMBO_FIELDS  = [...Object.keys(FIELD_UNITS), ...SWITCH_FIELDS];
@@ -1775,8 +1867,18 @@ async function loadEnergyHistory() {
   else if (!_histDate) { _histDate = _isoDate(new Date()); }
   try {
     const data = await fetch(BASE+'/api/energy/history?period='+_histPeriod+'&date='+_histDate).then(r=>r.json());
-    renderKwhChart(data); renderPriceChart(data);
+    renderKwhChart(data); renderPriceChart(data); renderConsumptionTotals(data.totals || {});
   } catch(e) { const el=document.getElementById('kwh-updated'); if(el) el.textContent=t('error'); }
+}
+function renderConsumptionTotals(tt) {
+  const kwh = v => (v != null ? (+v).toFixed(2) : '--') + ' kWh';
+  const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+  set('cs-grid',        '↓ ' + kwh(tt.kwh_in));            // imported
+  set('cs-grid-sub',    '↑ ' + kwh(tt.kwh_out));           // exported
+  set('cs-house',       kwh(tt.kwh_house));
+  set('cs-solar',       kwh(tt.kwh_solar));
+  set('cs-battery',     '↓ ' + kwh(tt.kwh_bat_charge));    // charged
+  set('cs-battery-sub', '↑ ' + kwh(tt.kwh_bat_discharge)); // discharged
 }
 function setHistPeriod(period, btn) {
   _histPeriod = period;

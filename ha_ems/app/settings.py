@@ -25,6 +25,15 @@ class EmsSettings:
     house_power_sensor: str = ""
     battery_soc_sensor: str = ""
     battery_power_sensor: str = ""
+    # Energy meters (kWh, cumulative / total_increasing) — preferred over
+    # integrating power. Any left empty falls back to integrating the matching
+    # power sensor. Cost/revenue in € are always computed from EPEX tariffs.
+    grid_import_energy_sensor: str = ""
+    grid_export_energy_sensor: str = ""
+    solar_energy_sensor: str = ""
+    house_energy_sensor: str = ""
+    battery_charge_energy_sensor: str = ""
+    battery_discharge_energy_sensor: str = ""
     battery_charge_switch: str = ""
     battery_discharge_switch: str = ""
     battery_standby_switch: str = ""
