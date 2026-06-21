@@ -800,7 +800,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .day-toggle{display:flex;gap:.4rem}
   .day-btn{padding:.2rem .6rem;border-radius:.4rem;border:1px solid var(--border);background:none;color:var(--muted);cursor:pointer;font-size:.75rem}
   .day-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
-  .hist-controls{display:flex;justify-content:space-between;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:.75rem}
+  .hist-controls{display:flex;flex-direction:column;align-items:center;gap:.5rem;margin-bottom:.75rem}
+  .hist-controls-row{display:flex;justify-content:center;align-items:center;gap:.4rem}
   .hist-nav{display:flex;align-items:center;gap:.4rem}
   .hist-date{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:.3rem .5rem;border-radius:.4rem;font-size:.8rem}
   /* HA-style energy period selector */
@@ -1106,7 +1107,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
   <!-- Global history filter — drives both charts above -->
   <div class="hist-controls">
-    <div class="day-toggle">
+    <div class="hist-controls-row">
       <button class="day-btn active" data-period="hourly"  data-i18n="p_hour" onclick="setHistPeriod('hourly',this)">Hour</button>
       <button class="day-btn"        data-period="daily"   data-i18n="p_day"  onclick="setHistPeriod('daily',this)">Day</button>
       <button class="day-btn"        data-period="monthly" data-i18n="p_year" onclick="setHistPeriod('monthly',this)">Year</button>
@@ -1189,7 +1190,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 
   <!-- Réel vs Prévisionnel -->
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:.75rem;margin-bottom:.3rem">
+  <div style="display:flex;flex-direction:column;align-items:center;gap:.5rem;margin-top:.75rem;margin-bottom:.3rem">
     <div class="section-title" style="margin:0" data-i18n="real_vs_fc">R&eacute;el vs Pr&eacute;visionnel</div>
     <div class="ha-period">
       <button class="ha-icon-btn" title="Select date">
@@ -1881,7 +1882,7 @@ function stepAnalysisDate(dir) {
   if (inp) inp.value = _analysisDate;
   loadAnalysisComparison();
 }
-function analysisToday(){ _analysisDate=_isoDate(new Date()); const inp=document.getElementById('analysisDate'); if(inp) inp.value=_analysisDate; loadAnalysisComparison(); }
+function analysisToday(){ _analysisDate=_isoDate(new Date()); const inp=document.getElementById('analysisDate'); if(inp) inp.value=_analysisDate; _updateLabel('analysisDateLabel',_analysisDate,'hourly'); loadAnalysisComparison(); }
 
 function renderComparisonChart(hist, fc) {
   const ctx = document.getElementById('comparisonChart');
@@ -2071,7 +2072,7 @@ async function loadEnergyHistory() {
     renderKwhChart(data); renderPriceChart(data); renderConsumptionTotals(data.totals || {});
   } catch(e) { const el=document.getElementById('kwh-updated'); if(el) el.textContent=t('error'); }
 }
-function histToday(){ _histDate=_isoDate(new Date()); const inp=document.getElementById('histDate'); if(inp) inp.value=_histDate; loadEnergyHistory(); }
+function histToday(){ _histDate=_isoDate(new Date()); const inp=document.getElementById('histDate'); if(inp) inp.value=_histDate; _updateLabel('histDateLabel',_histDate,_histPeriod); loadEnergyHistory(); }
 function renderConsumptionTotals(tt) {
   const kwh = v => (v != null ? (+v).toFixed(2) : '--') + ' kWh';
   const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
