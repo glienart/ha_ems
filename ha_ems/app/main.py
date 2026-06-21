@@ -1019,6 +1019,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="card"><div class="card-label" style="color:#ff9800" data-i18n="cs_solar">Solar</div><div class="card-value" id="cs-solar">--</div><div class="card-sub" data-i18n="cs_produced">produced</div></div>
     <div class="card"><div class="card-label" style="color:#4db6ac" data-i18n="cs_battery">Battery</div><div class="card-value" id="cs-battery">--</div><div class="card-sub" id="cs-battery-sub">&#8593; --</div></div>
   </div>
+  <!-- Period cost totals (€) for the selected day/month/year -->
+  <div class="grid" style="margin-bottom:.75rem">
+    <div class="card"><div class="card-label" style="color:#10b981" data-i18n="cs_revenue">Revenue</div><div class="card-value" id="cs-revenue">--</div><div class="card-sub" data-i18n="cs_exported_rev">exported</div></div>
+    <div class="card"><div class="card-label" style="color:#ef4444" data-i18n="cs_cost">Expenses</div><div class="card-value" id="cs-cost">--</div><div class="card-sub" data-i18n="cs_imported_cost">imported</div></div>
+    <div class="card"><div class="card-label" data-i18n="cs_net">Total</div><div class="card-value" id="cs-net">--</div><div class="card-sub" id="cs-net-sub" data-i18n="cs_net_sub">net cost</div></div>
+  </div>
   <div class="section-title" data-i18n="consumption_cost">Consumption &amp; Cost</div>
   <div class="dual-grid">
     <div class="card">
@@ -1168,6 +1174,7 @@ const I18N = {
         hist_ok:'consumption history OK', hist_default:'default consumption',
         calib_learn:'solar calibration learning…', calib_home:'home calibration', calib_hours:'h learned',
         cs_grid:'Grid', cs_house:'House', cs_solar:'Solar', cs_battery:'Battery', cs_consumed:'consumed', cs_produced:'produced',
+        cs_revenue:'Revenue', cs_cost:'Expenses', cs_net:'Total', cs_exported_rev:'exported', cs_imported_cost:'imported', cs_net_sub:'net cost', cs_net_credit:'net credit',
         bars:'bars', error:'Error', real_vs_fc:'Real vs Forecast', real_solar:'Solar (actual)', real_conso:'Consumption (actual)' },
   fr: { tab_live:'Live', tab_consumption:'Consommation', tab_analysis:'Analyse',
         mode:'Mode', live_readings:'Mesures en direct', decisions:'Décisions', last_reason:'Dernière décision',
@@ -1181,6 +1188,7 @@ const I18N = {
         hist_ok:'historique conso OK', hist_default:'conso par défaut',
         calib_learn:'calibration solaire en apprentissage…', calib_home:'calibration maison', calib_hours:'h apprises',
         cs_grid:'Réseau', cs_house:'Maison', cs_solar:'Solaire', cs_battery:'Batterie', cs_consumed:'consommé', cs_produced:'produit',
+        cs_revenue:'Revenu', cs_cost:'Dépenses', cs_net:'Total', cs_exported_rev:'exporté', cs_imported_cost:'importé', cs_net_sub:'coût net', cs_net_credit:'crédit net',
         bars:'barres', error:'Erreur', real_vs_fc:'Réel vs Prévisionnel', real_solar:'Solaire (réel)', real_conso:'Consommation (réelle)' },
 };
 const LANG = (function(){ try { const l=(window.parent.document.documentElement.lang||navigator.language||'en').slice(0,2).toLowerCase(); return I18N[l]?l:'en'; } catch(e){ return 'en'; } })();
@@ -1961,6 +1969,14 @@ function renderConsumptionTotals(tt) {
   set('cs-solar',       kwh(tt.kwh_solar));
   set('cs-battery',     '↓ ' + kwh(tt.kwh_bat_charge));    // charged
   set('cs-battery-sub', '↑ ' + kwh(tt.kwh_bat_discharge)); // discharged
+  const eur = v => (v != null ? (+v).toFixed(2) : '--') + ' €';
+  set('cs-revenue', eur(tt.revenue));
+  set('cs-cost',    eur(tt.cost));
+  const net = tt.net_cost;
+  set('cs-net', (net != null ? (net >= 0 ? '' : '-') + Math.abs(net).toFixed(2) : '--') + ' €');
+  const netEl = document.getElementById('cs-net');
+  if (netEl && net != null) netEl.style.color = net > 0 ? '#ef4444' : '#10b981';
+  set('cs-net-sub', net != null && net <= 0 ? t('cs_net_credit') : t('cs_net_sub'));
 }
 function setHistPeriod(period, btn) {
   _histPeriod = period;

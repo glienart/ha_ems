@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.3
+
+### Added
+- **Stats de coût sur Consumption** : nouvelles cartes **Revenu**, **Dépenses** et
+  **Total** (coût net en €) au-dessus des graphes, calculées sur la période
+  sélectionnée (jour / mois / année). Le Total passe en vert quand il s'agit d'un
+  crédit net (revenu > dépenses).
+
 ## 0.6.2
 
 ### Added
