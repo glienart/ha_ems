@@ -324,22 +324,26 @@ function drawEpexChart(slots) {
   const now = new Date();
   const labels = slots.map(s => new Date(s.start).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));
   const vals   = slots.map(s => +s.price_eur_kwh.toFixed(4));
+  const mn = Math.min(...slots.map(x=>x.price_eur_kwh));
+  const mx = Math.max(...slots.map(x=>x.price_eur_kwh));
+  const isCurrent = s => new Date(s.start) <= now && now < new Date(s.end);
   const colors = slots.map(s => {
-    const isCurrent = new Date(s.start) <= now && now < new Date(s.end);
-    if (isCurrent) return 'rgba(245,158,11,0.95)';
+    // Current slot: blue, kept out of the green→red price gradient so it stands out
+    if (isCurrent(s)) return 'rgba(37,99,235,0.95)';
     const v = s.price_eur_kwh;
-    const mn = Math.min(...slots.map(x=>x.price_eur_kwh));
-    const mx = Math.max(...slots.map(x=>x.price_eur_kwh));
     const ratio = mx > mn ? (v - mn)/(mx - mn) : 0.5;
     const r = Math.round(16 + ratio*239), g = Math.round(185 - ratio*151), b = Math.round(129 - ratio*100);
     return `rgba(${r},${g},${b},0.85)`;
   });
+  // Marker outline on the current slot for extra emphasis
+  const borderColors = slots.map(s => isCurrent(s) ? '#1e3a8a' : 'rgba(0,0,0,0)');
+  const borderWidths = slots.map(s => isCurrent(s) ? 2 : 0);
 
   const ctx = document.getElementById('epexChart').getContext('2d');
   if (_epexChartInst) _epexChartInst.destroy();
   _epexChartInst = new Chart(ctx, {
     type: 'bar',
-    data: { labels, datasets: [{ data: vals, backgroundColor: colors, borderRadius: 2 }] },
+    data: { labels, datasets: [{ data: vals, backgroundColor: colors, borderColor: borderColors, borderWidth: borderWidths, borderRadius: 2 }] },
     options: {
       responsive: true, maintainAspectRatio: false,
       animation: { duration: 600 },
