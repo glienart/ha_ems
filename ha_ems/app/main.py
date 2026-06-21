@@ -1107,6 +1107,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Réel vs Prévisionnel -->
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:.75rem;margin-bottom:.3rem">
+    <div class="section-title" style="margin:0" data-i18n="real_vs_fc">R&eacute;el vs Pr&eacute;visionnel</div>
+    <div class="hist-nav">
+      <button class="day-btn" onclick="stepAnalysisDate(-1)" title="Previous">&#8249;</button>
+      <input type="date" id="analysisDate" class="hist-date" onchange="loadAnalysisComparison()">
+      <button class="day-btn" onclick="stepAnalysisDate(1)" title="Next">&#8250;</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="chart-wrap" style="height:220px"><canvas id="comparisonChart"></canvas></div>
+    <div class="updated" id="comparison-updated"></div>
+  </div>
+
 </div>
 
 <div class="toast" id="toast">Saved!</div>
@@ -1154,7 +1168,7 @@ const I18N = {
         hist_ok:'consumption history OK', hist_default:'default consumption',
         calib_learn:'solar calibration learning…', calib_home:'home calibration', calib_hours:'h learned',
         cs_grid:'Grid', cs_house:'House', cs_solar:'Solar', cs_battery:'Battery', cs_consumed:'consumed', cs_produced:'produced',
-        bars:'bars', error:'Error' },
+        bars:'bars', error:'Error', real_vs_fc:'Real vs Forecast', real_solar:'Solar (actual)', real_conso:'Consumption (actual)' },
   fr: { tab_live:'Live', tab_consumption:'Consommation', tab_analysis:'Analyse',
         mode:'Mode', live_readings:'Mesures en direct', decisions:'Décisions', last_reason:'Dernière décision',
         consumption_cost:'Consommation & Coût', consumption_kwh:'Consommation (kWh)', price_paid:'Prix payé (€)',
@@ -1167,7 +1181,7 @@ const I18N = {
         hist_ok:'historique conso OK', hist_default:'conso par défaut',
         calib_learn:'calibration solaire en apprentissage…', calib_home:'calibration maison', calib_hours:'h apprises',
         cs_grid:'Réseau', cs_house:'Maison', cs_solar:'Solaire', cs_battery:'Batterie', cs_consumed:'consommé', cs_produced:'produit',
-        bars:'barres', error:'Erreur' },
+        bars:'barres', error:'Erreur', real_vs_fc:'Réel vs Prévisionnel', real_solar:'Solaire (réel)', real_conso:'Consommation (réelle)' },
 };
 const LANG = (function(){ try { const l=(window.parent.document.documentElement.lang||navigator.language||'en').slice(0,2).toLowerCase(); return I18N[l]?l:'en'; } catch(e){ return 'en'; } })();
 function t(k){ return (I18N[LANG] && I18N[LANG][k]) || I18N.en[k] || k; }
@@ -1187,7 +1201,7 @@ function showPage(name) {
   if (name === "settings") loadSettings();
   if (name === "live") loadPowerChart();
   if (name === "consumption") loadEnergyHistory();
-  if (name === "analysis") { if (!_epexData) loadEpex(); loadForecast(); }
+  if (name === "analysis") { if (!_epexData) loadEpex(); loadForecast(); loadAnalysisComparison(); }
 }
 window.addEventListener("hashchange", () => showPage((location.hash || "").replace("#", "")));
 
@@ -1663,9 +1677,9 @@ setInterval(loadEpex, 15*60*1000);
 
 // ── 24h optimized battery plan (/api/forecast) ──
 const PLAN_MAP = {charge:{cls:"green",label:t('act_charge')},discharge:{cls:"yellow",label:t('act_discharge')},idle:{cls:"gray",label:t('act_idle')}};
-let _forecastChartInst = null;
+let _forecastChartInst = null, _forecastData = null;
 async function loadForecast() {
-  try { renderForecast(await fetch(BASE+'/api/forecast').then(r=>r.json())); }
+  try { _forecastData = await fetch(BASE+'/api/forecast').then(r=>r.json()); renderForecast(_forecastData); }
   catch(e) { console.error('Forecast:', e); }
 }
 function renderForecast(d) {
@@ -1734,6 +1748,74 @@ function renderForecast(d) {
   if (cur) setTimeout(function(){ cur.scrollIntoView({block:'nearest'}); }, 100);
 }
 setInterval(function(){ if(document.getElementById('page-analysis').classList.contains('active')) loadForecast(); }, 5*60*1000);
+
+// ── Analysis: Réel vs Prévisionnel ──
+let _analysisDate = '', _comparisonChartInst = null;
+
+async function loadAnalysisComparison() {
+  const inp = document.getElementById('analysisDate');
+  if (inp) { if (!inp.value) inp.value = _analysisDate || _isoDate(new Date()); _analysisDate = inp.value; }
+  else if (!_analysisDate) _analysisDate = _isoDate(new Date());
+  const today = _isoDate(new Date());
+  try {
+    const hist = await fetch(BASE+'/api/energy/history?period=hourly&date='+_analysisDate).then(r=>r.json());
+    // forecast only makes sense for today (it's always the current 24h plan)
+    const fc = (_analysisDate === today && _forecastData) ? _forecastData : null;
+    renderComparisonChart(hist, fc);
+  } catch(e) { const el=document.getElementById('comparison-updated'); if(el) el.textContent=t('error'); }
+}
+
+function stepAnalysisDate(dir) {
+  const inp = document.getElementById('analysisDate');
+  const base = (inp && inp.value) ? new Date(inp.value+'T00:00:00') : new Date();
+  base.setDate(base.getDate() + dir);
+  _analysisDate = _isoDate(base);
+  if (inp) inp.value = _analysisDate;
+  loadAnalysisComparison();
+}
+
+function renderComparisonChart(hist, fc) {
+  const ctx = document.getElementById('comparisonChart');
+  if (!ctx || typeof Chart === 'undefined') return;
+  const items = (hist && hist.items) || [];
+  const labels = items.map(i => i.label);
+  const realSolar = items.map(i => +((i.kwh_solar||0)).toFixed(3));
+  const realConso = items.map(i => +((i.kwh_house||0)).toFixed(3));
+
+  const datasets = [];
+  datasets.push({ label: t('real_solar'), data: realSolar, type:'bar', backgroundColor:'rgba(255,152,0,0.55)', borderRadius:2, yAxisID:'y', order:2 });
+  datasets.push({ label: t('real_conso'), data: realConso, type:'bar', backgroundColor:'rgba(124,77,255,0.55)', borderRadius:2, yAxisID:'y', order:2 });
+
+  if (fc && fc.schedule && fc.schedule.length) {
+    // Build a map label→forecast for easy alignment
+    const fcMap = {};
+    for (const s of fc.schedule) fcMap[s.hour_label] = s;
+    const fcSolar = labels.map(l => fcMap[l] ? +((fcMap[l].solar_w||0)/1000).toFixed(3) : null);
+    const fcConso = labels.map(l => fcMap[l] ? +((fcMap[l].consumption_w||0)/1000).toFixed(3) : null);
+    datasets.push({ label: t('fc_solar'), data: fcSolar, type:'line', borderColor:'rgba(255,152,0,1)', backgroundColor:'transparent', pointRadius:2, borderWidth:1.5, borderDash:[5,3], yAxisID:'y', order:1, spanGaps:true });
+    datasets.push({ label: t('fc_conso'), data: fcConso, type:'line', borderColor:'rgba(124,77,255,1)', backgroundColor:'transparent', pointRadius:2, borderWidth:1.5, borderDash:[5,3], yAxisID:'y', order:1, spanGaps:true });
+  }
+
+  if (_comparisonChartInst) _comparisonChartInst.destroy();
+  _comparisonChartInst = new Chart(ctx.getContext('2d'), {
+    type: 'bar',
+    data: { labels, datasets },
+    options: {
+      responsive:true, maintainAspectRatio:false, animation:{duration:400},
+      plugins:{ legend:{display:true,labels:{font:{size:10},boxWidth:10,usePointStyle:true}},
+                tooltip:{mode:'index',intersect:false,callbacks:{label:c=>` ${c.dataset.label}: ${Math.abs(c.parsed.y??0).toFixed(3)} kWh`}} },
+      scales:{
+        x:{ticks:{maxTicksLimit:12,font:{size:9}},grid:{display:false}},
+        y:{beginAtZero:true,ticks:{font:{size:9},callback:v=>v.toFixed(2)+' kWh'}}
+      }
+    }
+  });
+  const el = document.getElementById('comparison-updated');
+  if (el) {
+    const isToday = _analysisDate === _isoDate(new Date());
+    el.textContent = _analysisDate + (fc ? ' · ' + t('forecast_24h') : '') + (isToday && !fc ? ' · '+t('solar_fc_off') : '');
+  }
+}
 
 // POWER HISTORY CHART
 let _powerChart = null;
