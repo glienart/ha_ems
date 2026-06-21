@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.6.5
+
+### Changed
+- **Couleurs EPEX sur référence historique fixe** : les barres du graphe et de la
+  table de prix utilisent désormais un dégradé continu vert→jaune→rouge basé sur
+  les **min/max jamais atteints** (mémorisés par zone), au lieu du min/max du jour
+  affiché. Un créneau bon marché reste donc vert quel que soit le reste de la
+  journée. Repli sur le min/max du jour tant que l'historique est insuffisant.
+- **Prévision solaire plus fiable (correction météo intra-journalière)** : en plus
+  du facteur de calibration par heure (biais systématique long terme), l'add-on
+  compare en continu la production réelle du jour à ce qui était prévu pour les
+  heures de jour déjà écoulées, et applique ce ratio (« météo du jour ») aux
+  heures restantes. Un matin nuageux/ensoleillé reforme immédiatement la courbe
+  du reste de la journée. Le facteur du jour est affiché sous « Prévisions 24h ».
+
+## 0.6.4
+
+### Changed
+- **Sélecteur de date façon Home Assistant** sur les onglets **Consumption** et
+  **Analysis** : barre avec icône calendrier (ouvre le sélecteur natif), bouton
+  **Auj.** pour revenir à aujourd'hui, chevrons précédent/suivant et libellé de
+  période centré (jour / mois / année selon l'agrégation choisie).
+
+## 0.6.3
+
+### Added
+- **Stats de coût sur Consumption** : nouvelles cartes **Revenu**, **Dépenses** et
+  **Total** (coût net en €) au-dessus des graphes, calculées sur la période
+  sélectionnée (jour / mois / année). Le Total passe en vert quand il s'agit d'un
+  crédit net (revenu > dépenses).
+
 ## 0.6.2
 
 ### Added

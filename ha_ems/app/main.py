@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -49,6 +50,45 @@ _solar_calib: SolarCalibration = SolarCalibration()
 _energy_logger: EnergyLogger = EnergyLogger()
 _meter_last: dict = {}   # role -> last cumulative kWh reading (for meter deltas)
 _schedule_task: Optional[asyncio.Task] = None
+
+# All-time EPEX price extremes (per zone), so the price chart can be coloured
+# against fixed historical bounds instead of each day's own min/max — a 0.05 €
+# slot then looks the same green whatever the rest of that particular day was.
+EPEX_EXTREMES_PATH = "/data/epex_extremes.json"
+_epex_extremes: dict = {}   # zone -> {"min": float, "max": float}
+
+
+def _load_epex_extremes() -> None:
+    global _epex_extremes
+    try:
+        if os.path.exists(EPEX_EXTREMES_PATH):
+            with open(EPEX_EXTREMES_PATH) as f:
+                _epex_extremes = json.load(f)
+    except Exception as exc:
+        _LOGGER.error("Failed to load EPEX extremes: %s", exc)
+        _epex_extremes = {}
+
+
+def _update_epex_extremes(zone: str, data: dict) -> None:
+    """Widen the stored min/max for `zone` with the freshly fetched prices."""
+    slots = (data.get("prices_today") or []) + (data.get("prices_tomorrow") or [])
+    vals = [s["price_eur_kwh"] for s in slots if s.get("price_eur_kwh") is not None]
+    if not vals:
+        return
+    cur = _epex_extremes.get(zone) or {}
+    lo = min([cur["min"]] + vals) if "min" in cur else min(vals)
+    hi = max([cur["max"]] + vals) if "max" in cur else max(vals)
+    if cur.get("min") == lo and cur.get("max") == hi:
+        return
+    _epex_extremes[zone] = {"min": round(lo, 6), "max": round(hi, 6)}
+    try:
+        with open(EPEX_EXTREMES_PATH, "w") as f:
+            json.dump(_epex_extremes, f)
+    except Exception as exc:
+        _LOGGER.error("Failed to save EPEX extremes: %s", exc)
+
+
+_load_epex_extremes()
 
 
 @asynccontextmanager
@@ -101,6 +141,7 @@ async def epex_loop():
             data = await fetch_prices(resolve_zone(_settings.epex_zone), _settings.epex_token)
             if data:
                 _epex_data = data
+                _update_epex_extremes(_settings.epex_zone, data)
                 await _publish_epex(data)
                 _LOGGER.info("EPEX price updated: %.4f EUR/kWh (zone %s)",
                              data.get("current_price") or 0, _settings.epex_zone)
@@ -142,7 +183,7 @@ async def rebuild_schedule() -> None:
     sell_prices = [{**p, "price_eur_kwh": p["price_eur_kwh"]*s.tariff_a_injection+s.tariff_b_injection} for p in all_epex]
     bat_soc = await ha_client.get_float(s.battery_soc_sensor, default=50.0) or 50.0
     # Keep _solar_forecast raw (for learning); feed the house-calibrated copy to the planner.
-    calibrated_solar = _solar_calib.apply(_solar_forecast) if _solar_forecast else {}
+    calibrated_solar = _solar_calib.apply(_solar_forecast, datetime.now()) if _solar_forecast else {}
     try:
         _schedule = build_schedule(
             now=datetime.now(),
@@ -426,6 +467,10 @@ async def api_epex():
         return JSONResponse({"error": "No EPEX data -- check token and zone in settings"})
     data = dict(_epex_data)
     data["zone"] = _settings.epex_zone  # so the dashboard can show the active zone
+    ext = _epex_extremes.get(_settings.epex_zone)
+    if ext:
+        data["hist_min"] = ext.get("min")
+        data["hist_max"] = ext.get("max")
     return JSONResponse(data)
 
 
@@ -456,6 +501,7 @@ async def api_forecast():
         "solar_calibration": {
             "mean_factor": _solar_calib.mean_factor,
             "hours_learned": _solar_calib.hours_learned,
+            "today_factor": _solar_calib.today_factor,
         },
     })
 
@@ -746,6 +792,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .hist-controls{display:flex;justify-content:space-between;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:.75rem}
   .hist-nav{display:flex;align-items:center;gap:.4rem}
   .hist-date{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:.3rem .5rem;border-radius:.4rem;font-size:.8rem}
+  /* HA-style energy period selector */
+  .ha-period{display:flex;align-items:center;gap:.4rem;background:var(--card);border:1px solid var(--border);border-radius:.7rem;padding:.3rem .45rem}
+  .ha-period-label{min-width:5.5rem;text-align:center;font-weight:600;font-size:.92rem;color:var(--text);white-space:nowrap}
+  .ha-icon-btn{position:relative;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:none;background:none;color:var(--accent);cursor:pointer;border-radius:50%;flex:none}
+  .ha-icon-btn:hover{background:rgba(127,127,127,.14)}
+  .ha-icon-btn svg{width:22px;height:22px;fill:currentColor;pointer-events:none}
+  .ha-icon-btn input[type=date]{position:absolute;inset:0;width:100%;height:100%;opacity:0;border:none;cursor:pointer;padding:0}
+  .ha-now-btn{padding:.25rem .75rem;border-radius:1rem;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;font-size:.78rem;font-weight:600}
+  .ha-now-btn:hover{filter:brightness(1.08)}
   .chart-wrap{position:relative;height:160px;margin-bottom:.5rem}
   .price-table{width:100%;border-collapse:collapse;font-size:.75rem}
   .price-table th{color:var(--muted);font-size:.62rem;text-transform:uppercase;padding:.25rem .4rem;border-bottom:1px solid var(--border);text-align:left;position:sticky;top:0;background:var(--card)}
@@ -1019,6 +1074,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="card"><div class="card-label" style="color:#ff9800" data-i18n="cs_solar">Solar</div><div class="card-value" id="cs-solar">--</div><div class="card-sub" data-i18n="cs_produced">produced</div></div>
     <div class="card"><div class="card-label" style="color:#4db6ac" data-i18n="cs_battery">Battery</div><div class="card-value" id="cs-battery">--</div><div class="card-sub" id="cs-battery-sub">&#8593; --</div></div>
   </div>
+  <!-- Period cost totals (€) for the selected day/month/year -->
+  <div class="grid" style="margin-bottom:.75rem">
+    <div class="card"><div class="card-label" style="color:#10b981" data-i18n="cs_revenue">Revenue</div><div class="card-value" id="cs-revenue">--</div><div class="card-sub" data-i18n="cs_exported_rev">exported</div></div>
+    <div class="card"><div class="card-label" style="color:#ef4444" data-i18n="cs_cost">Expenses</div><div class="card-value" id="cs-cost">--</div><div class="card-sub" data-i18n="cs_imported_cost">imported</div></div>
+    <div class="card"><div class="card-label" data-i18n="cs_net">Total</div><div class="card-value" id="cs-net">--</div><div class="card-sub" id="cs-net-sub" data-i18n="cs_net_sub">net cost</div></div>
+  </div>
   <div class="section-title" data-i18n="consumption_cost">Consumption &amp; Cost</div>
   <div class="dual-grid">
     <div class="card">
@@ -1039,10 +1100,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <button class="day-btn"        data-period="daily"   data-i18n="p_day"  onclick="setHistPeriod('daily',this)">Day</button>
       <button class="day-btn"        data-period="monthly" data-i18n="p_year" onclick="setHistPeriod('monthly',this)">Year</button>
     </div>
-    <div class="hist-nav">
-      <button class="day-btn" onclick="stepHist(-1)" title="Previous">&#8249;</button>
-      <input type="date" id="histDate" class="hist-date" onchange="loadEnergyHistory()">
-      <button class="day-btn" onclick="stepHist(1)" title="Next">&#8250;</button>
+    <div class="ha-period">
+      <button class="ha-icon-btn" title="Select date">
+        <svg viewBox="0 0 24 24"><path d="M19,19H5V8H19M16,1V3H8V1H6V3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3H18V1M17,12H12V17H17V12Z"/></svg>
+        <input type="date" id="histDate" onclick="this.showPicker&&this.showPicker()" onchange="loadEnergyHistory()">
+      </button>
+      <button class="ha-now-btn" data-i18n="now" onclick="histToday()">Now</button>
+      <button class="ha-icon-btn" onclick="stepHist(-1)" title="Previous">
+        <svg viewBox="0 0 24 24"><path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/></svg>
+      </button>
+      <div class="ha-period-label" id="histDateLabel">--</div>
+      <button class="ha-icon-btn" onclick="stepHist(1)" title="Next">
+        <svg viewBox="0 0 24 24"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
+      </button>
     </div>
   </div>
 </div>
@@ -1110,10 +1180,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <!-- Réel vs Prévisionnel -->
   <div style="display:flex;justify-content:space-between;align-items:center;margin-top:.75rem;margin-bottom:.3rem">
     <div class="section-title" style="margin:0" data-i18n="real_vs_fc">R&eacute;el vs Pr&eacute;visionnel</div>
-    <div class="hist-nav">
-      <button class="day-btn" onclick="stepAnalysisDate(-1)" title="Previous">&#8249;</button>
-      <input type="date" id="analysisDate" class="hist-date" onchange="loadAnalysisComparison()">
-      <button class="day-btn" onclick="stepAnalysisDate(1)" title="Next">&#8250;</button>
+    <div class="ha-period">
+      <button class="ha-icon-btn" title="Select date">
+        <svg viewBox="0 0 24 24"><path d="M19,19H5V8H19M16,1V3H8V1H6V3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3H18V1M17,12H12V17H17V12Z"/></svg>
+        <input type="date" id="analysisDate" onclick="this.showPicker&&this.showPicker()" onchange="loadAnalysisComparison()">
+      </button>
+      <button class="ha-now-btn" data-i18n="now" onclick="analysisToday()">Now</button>
+      <button class="ha-icon-btn" onclick="stepAnalysisDate(-1)" title="Previous">
+        <svg viewBox="0 0 24 24"><path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/></svg>
+      </button>
+      <div class="ha-period-label" id="analysisDateLabel">--</div>
+      <button class="ha-icon-btn" onclick="stepAnalysisDate(1)" title="Next">
+        <svg viewBox="0 0 24 24"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
+      </button>
     </div>
   </div>
   <div class="card">
@@ -1166,8 +1245,9 @@ const I18N = {
         act_charge:'Charge', act_discharge:'Discharge', act_idle:'Idle',
         updated:'updated', solar_fc_on:'solar forecast', solar_fc_off:'no solar forecast',
         hist_ok:'consumption history OK', hist_default:'default consumption',
-        calib_learn:'solar calibration learning…', calib_home:'home calibration', calib_hours:'h learned',
+        calib_learn:'solar calibration learning…', calib_home:'home calibration', calib_hours:'h learned', calib_today:'today',
         cs_grid:'Grid', cs_house:'House', cs_solar:'Solar', cs_battery:'Battery', cs_consumed:'consumed', cs_produced:'produced',
+        cs_revenue:'Revenue', cs_cost:'Expenses', cs_net:'Total', cs_exported_rev:'exported', cs_imported_cost:'imported', cs_net_sub:'net cost', cs_net_credit:'net credit', now:'Now',
         bars:'bars', error:'Error', real_vs_fc:'Real vs Forecast', real_solar:'Solar (actual)', real_conso:'Consumption (actual)' },
   fr: { tab_live:'Live', tab_consumption:'Consommation', tab_analysis:'Analyse',
         mode:'Mode', live_readings:'Mesures en direct', decisions:'Décisions', last_reason:'Dernière décision',
@@ -1179,8 +1259,9 @@ const I18N = {
         act_charge:'Charge', act_discharge:'Décharge', act_idle:'Repos',
         updated:'màj', solar_fc_on:'prévision solaire', solar_fc_off:'sans prévision solaire',
         hist_ok:'historique conso OK', hist_default:'conso par défaut',
-        calib_learn:'calibration solaire en apprentissage…', calib_home:'calibration maison', calib_hours:'h apprises',
+        calib_learn:'calibration solaire en apprentissage…', calib_home:'calibration maison', calib_hours:'h apprises', calib_today:'aujourd\\'hui',
         cs_grid:'Réseau', cs_house:'Maison', cs_solar:'Solaire', cs_battery:'Batterie', cs_consumed:'consommé', cs_produced:'produit',
+        cs_revenue:'Revenu', cs_cost:'Dépenses', cs_net:'Total', cs_exported_rev:'exporté', cs_imported_cost:'importé', cs_net_sub:'coût net', cs_net_credit:'crédit net', now:'Auj.',
         bars:'barres', error:'Erreur', real_vs_fc:'Réel vs Prévisionnel', real_solar:'Solaire (réel)', real_conso:'Consommation (réelle)' },
 };
 const LANG = (function(){ try { const l=(window.parent.document.documentElement.lang||navigator.language||'en').slice(0,2).toLowerCase(); return I18N[l]?l:'en'; } catch(e){ return 'en'; } })();
@@ -1627,17 +1708,31 @@ function epexDay(day, btn) {
   drawEpexChart(slots); renderSchedule(slots);
 }
 
+// Colour bounds: prefer the all-time historical min/max (fixed reference) so a
+// cheap slot is always the same green regardless of the rest of the day; fall
+// back to the displayed day's own range until enough history is collected.
+function _priceBounds(slots) {
+  const d = _epexData || {};
+  if (d.hist_min != null && d.hist_max != null && d.hist_max > d.hist_min)
+    return { mn: d.hist_min, mx: d.hist_max };
+  return { mn: Math.min(...slots.map(s=>s.price_eur_kwh)), mx: Math.max(...slots.map(s=>s.price_eur_kwh)) };
+}
+// Continuous green→yellow→red gradient for a price within [mn, mx].
+function _priceColor(price, mn, mx, alpha) {
+  const r = mx>mn ? Math.max(0, Math.min(1, (price-mn)/(mx-mn))) : 0.5;
+  const hue = 120 * (1 - r);   // 120=green → 0=red, passing through yellow at 60
+  return 'hsla('+hue.toFixed(0)+',75%,45%,'+(alpha!=null?alpha:1)+')';
+}
+
 function drawEpexChart(slots) {
   if (!slots||!slots.length) return;
   const now = new Date();
-  const mn = Math.min(...slots.map(s=>s.price_eur_kwh));
-  const mx = Math.max(...slots.map(s=>s.price_eur_kwh));
+  const b = _priceBounds(slots);
   const labels = slots.map(s=>new Date(s.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));
   const vals   = slots.map(s=>+s.price_eur_kwh.toFixed(4));
   const colors = slots.map(s=>{
     if (new Date(s.start)<=now && now<new Date(s.end)) return 'rgba(245,158,11,.95)';
-    const r = mx>mn?(s.price_eur_kwh-mn)/(mx-mn):0.5;
-    return r<0.33?'rgba(16,185,129,.8)':r>0.66?'rgba(239,68,68,.8)':'rgba(245,158,11,.75)';
+    return _priceColor(s.price_eur_kwh, b.mn, b.mx, 0.8);
   });
   const ctx = document.getElementById('epexChart').getContext('2d');
   if (_epexChartInst) _epexChartInst.destroy();
@@ -1659,12 +1754,11 @@ function renderSchedule(slots) {
   const tbody = document.getElementById('sched-body');
   if (!slots||!slots.length){tbody.innerHTML='<tr><td colspan="3" style="color:var(--muted);text-align:center;padding:.5rem">No data</td></tr>';return;}
   const now=new Date();
-  const mn=Math.min(...slots.map(s=>s.price_eur_kwh));
-  const mx=Math.max(...slots.map(s=>s.price_eur_kwh));
+  const b=_priceBounds(slots);
   tbody.innerHTML=slots.map(s=>{
     const isCur=new Date(s.start)<=now&&now<new Date(s.end);
-    const pct=mx>mn?Math.round((s.price_eur_kwh-mn)/(mx-mn)*100):50;
-    const col=pct<33?'var(--green)':pct>66?'var(--red)':'var(--yellow)';
+    const pct=b.mx>b.mn?Math.round((s.price_eur_kwh-b.mn)/(b.mx-b.mn)*100):50;
+    const col=_priceColor(s.price_eur_kwh, b.mn, b.mx, 1);
     const t=new Date(s.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     return '<tr class="'+(isCur?'cur':'')+'"><td>'+t+'</td><td>'+s.price_eur_kwh.toFixed(4)+'</td><td><div class="pbar" style="width:'+Math.max(4,pct)+'%;background:'+col+'"></div></td></tr>';
   }).join('');
@@ -1740,9 +1834,11 @@ function renderForecast(d) {
   const fcCalib = document.getElementById('fc-calib');
   if (fcCalib) {
     const c = d.solar_calibration;
-    fcCalib.textContent = (c && c.hours_learned > 0)
+    let txt = (c && c.hours_learned > 0)
       ? '· ' + t('calib_home') + ' ×' + c.mean_factor + ' (' + c.hours_learned + ' ' + t('calib_hours') + ')'
       : '· ' + t('calib_learn');
+    if (c && c.today_factor != null) txt += ' · ' + t('calib_today') + ' ×' + c.today_factor.toFixed(2);
+    fcCalib.textContent = txt;
   }
   const cur = body.querySelector('tr.cur');
   if (cur) setTimeout(function(){ cur.scrollIntoView({block:'nearest'}); }, 100);
@@ -1756,6 +1852,7 @@ async function loadAnalysisComparison() {
   const inp = document.getElementById('analysisDate');
   if (inp) { if (!inp.value) inp.value = _analysisDate || _isoDate(new Date()); _analysisDate = inp.value; }
   else if (!_analysisDate) _analysisDate = _isoDate(new Date());
+  _updateLabel('analysisDateLabel', _analysisDate, 'hourly');
   const today = _isoDate(new Date());
   try {
     const hist = await fetch(BASE+'/api/energy/history?period=hourly&date='+_analysisDate).then(r=>r.json());
@@ -1773,6 +1870,7 @@ function stepAnalysisDate(dir) {
   if (inp) inp.value = _analysisDate;
   loadAnalysisComparison();
 }
+function analysisToday(){ _analysisDate=_isoDate(new Date()); const inp=document.getElementById('analysisDate'); if(inp) inp.value=_analysisDate; loadAnalysisComparison(); }
 
 function renderComparisonChart(hist, fc) {
   const ctx = document.getElementById('comparisonChart');
@@ -1943,15 +2041,26 @@ setInterval(loadPowerChart, 10 * 60 * 1000);
 // ── Energy history (Consommation & Coût): ONE global period + date for both charts ──
 let _histPeriod = 'hourly', _histDate = '', _kwhChartInst = null, _priceChartInst = null;
 function _isoDate(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+// HA-style centred period label, adapted to the active aggregation level.
+function _fmtPeriodLabel(dateStr, period){
+  const d = new Date((dateStr||_isoDate(new Date()))+'T00:00:00');
+  const loc = (LANG==='fr'?'fr-FR':undefined);
+  if (period==='monthly') return String(d.getFullYear());
+  if (period==='daily')   return d.toLocaleDateString(loc,{month:'short',year:'numeric'});
+  return d.toLocaleDateString(loc,{day:'numeric',month:'short',year:'numeric'});
+}
+function _updateLabel(id, dateStr, period){ const el=document.getElementById(id); if(el) el.textContent=_fmtPeriodLabel(dateStr,period); }
 async function loadEnergyHistory() {
   const inp = document.getElementById('histDate');
   if (inp) { if (!inp.value) inp.value = _histDate || _isoDate(new Date()); _histDate = inp.value; }
   else if (!_histDate) { _histDate = _isoDate(new Date()); }
+  _updateLabel('histDateLabel', _histDate, _histPeriod);
   try {
     const data = await fetch(BASE+'/api/energy/history?period='+_histPeriod+'&date='+_histDate).then(r=>r.json());
     renderKwhChart(data); renderPriceChart(data); renderConsumptionTotals(data.totals || {});
   } catch(e) { const el=document.getElementById('kwh-updated'); if(el) el.textContent=t('error'); }
 }
+function histToday(){ _histDate=_isoDate(new Date()); const inp=document.getElementById('histDate'); if(inp) inp.value=_histDate; loadEnergyHistory(); }
 function renderConsumptionTotals(tt) {
   const kwh = v => (v != null ? (+v).toFixed(2) : '--') + ' kWh';
   const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
@@ -1961,6 +2070,14 @@ function renderConsumptionTotals(tt) {
   set('cs-solar',       kwh(tt.kwh_solar));
   set('cs-battery',     '↓ ' + kwh(tt.kwh_bat_charge));    // charged
   set('cs-battery-sub', '↑ ' + kwh(tt.kwh_bat_discharge)); // discharged
+  const eur = v => (v != null ? (+v).toFixed(2) : '--') + ' €';
+  set('cs-revenue', eur(tt.revenue));
+  set('cs-cost',    eur(tt.cost));
+  const net = tt.net_cost;
+  set('cs-net', (net != null ? (net >= 0 ? '' : '-') + Math.abs(net).toFixed(2) : '--') + ' €');
+  const netEl = document.getElementById('cs-net');
+  if (netEl && net != null) netEl.style.color = net > 0 ? '#ef4444' : '#10b981';
+  set('cs-net-sub', net != null && net <= 0 ? t('cs_net_credit') : t('cs_net_sub'));
 }
 function setHistPeriod(period, btn) {
   _histPeriod = period;

@@ -24,6 +24,13 @@ CALIB_ALPHA = 0.15      # EMA learning rate (slow, robust to noisy days)
 CALIB_MIN_FC_W = 100    # ignore hours where the forecast is essentially night
 CALIB_MIN_RATIO = 0.2   # clamp the per-hour correction to a sane band
 CALIB_MAX_RATIO = 3.0
+# Intra-day (weather) residual: how today's real production compares to what
+# the calibrated forecast predicted for the daylight hours already elapsed.
+# Applied to the remaining hours of *today* so a cloudy/sunny day is tracked
+# in real time instead of waiting for the slow per-hour EMA to catch up.
+TODAY_MIN_EXP_WH = 300.0  # need some meaningful elapsed daylight before trusting it
+TODAY_MIN_RATIO = 0.3
+TODAY_MAX_RATIO = 1.8
 
 
 async def fetch_solar_forecast(
@@ -155,7 +162,9 @@ class SolarCalibration:
         self._path = path
         self._alpha = alpha
         self._factors: dict[int, float] = {}        # hour_of_day -> factor
-        self._cur = {"hour": None, "sum": 0.0, "n": 0, "fc": 0.0}
+        self._cur = {"hour": None, "date": None, "sum": 0.0, "n": 0, "fc": 0.0}
+        # Running same-day comparison of real vs (calibrated) predicted production.
+        self._today = {"date": None, "act": 0.0, "exp": 0.0}
         self._load()
 
     def _load(self) -> None:
@@ -165,6 +174,10 @@ class SolarCalibration:
             with open(self._path) as f:
                 raw = json.load(f)
             self._factors = {int(k): float(v) for k, v in raw.get("factors", {}).items()}
+            td = raw.get("today")
+            if isinstance(td, dict) and td.get("date"):
+                self._today = {"date": td["date"], "act": float(td.get("act", 0.0)),
+                               "exp": float(td.get("exp", 0.0))}
             _LOGGER.info("Solar calibration loaded: %d learned hours", len(self._factors))
         except Exception as exc:
             _LOGGER.error("Failed to load solar calibration: %s", exc)
@@ -174,7 +187,10 @@ class SolarCalibration:
             return
         try:
             with open(self._path, "w") as f:
-                json.dump({"factors": {str(k): v for k, v in self._factors.items()}}, f)
+                json.dump({
+                    "factors": {str(k): v for k, v in self._factors.items()},
+                    "today": self._today,
+                }, f)
         except Exception as exc:
             _LOGGER.error("Failed to save solar calibration: %s", exc)
 
@@ -186,11 +202,12 @@ class SolarCalibration:
         if actual_w is None:
             return
         hour = now.hour
+        date = now.date().isoformat()
         if self._cur["hour"] is None:
-            self._cur = {"hour": hour, "sum": 0.0, "n": 0, "fc": forecast_w or 0.0}
+            self._cur = {"hour": hour, "date": date, "sum": 0.0, "n": 0, "fc": forecast_w or 0.0}
         elif self._cur["hour"] != hour:
             self._finalize()
-            self._cur = {"hour": hour, "sum": 0.0, "n": 0, "fc": forecast_w or 0.0}
+            self._cur = {"hour": hour, "date": date, "sum": 0.0, "n": 0, "fc": forecast_w or 0.0}
         self._cur["sum"] += max(0.0, actual_w)
         self._cur["n"] += 1
         if forecast_w:
@@ -201,12 +218,39 @@ class SolarCalibration:
         if c["n"] <= 0 or c["fc"] < CALIB_MIN_FC_W:
             return
         avg = c["sum"] / c["n"]
-        ratio = max(CALIB_MIN_RATIO, min(CALIB_MAX_RATIO, avg / c["fc"]))
         old = self._factors.get(c["hour"], 1.0)
+        ratio = max(CALIB_MIN_RATIO, min(CALIB_MAX_RATIO, avg / c["fc"]))
         self._factors[c["hour"]] = round((1 - self._alpha) * old + self._alpha * ratio, 4)
+        # Feed today's running weather residual: real vs what the *calibrated*
+        # forecast (fc × per-hour factor we'd have used) predicted for this hour.
+        self._accumulate_today(c.get("date"), avg, c["fc"] * old)
 
-    def apply(self, forecast_dict: dict) -> dict:
-        """Return a calibrated copy of {hour_key: watts}."""
+    def _accumulate_today(self, date_str, actual_w: float, expected_w: float) -> None:
+        if not date_str or expected_w <= 0:
+            return
+        if self._today.get("date") != date_str:
+            self._today = {"date": date_str, "act": 0.0, "exp": 0.0}
+        self._today["act"] += max(0.0, actual_w)
+        self._today["exp"] += expected_w
+
+    def today_residual(self, date_str) -> float | None:
+        """Weather factor for `date_str` from the daylight hours already elapsed
+        (≈1 on a typical day, <1 cloudy, >1 unusually sunny). None if not enough
+        data yet."""
+        t = self._today
+        if not date_str or t.get("date") != date_str or t["exp"] < TODAY_MIN_EXP_WH:
+            return None
+        return max(TODAY_MIN_RATIO, min(TODAY_MAX_RATIO, t["act"] / t["exp"]))
+
+    def apply(self, forecast_dict: dict, now: datetime | None = None) -> dict:
+        """Return a calibrated copy of {hour_key: watts}.
+
+        Per-hour factors correct the long-term systematic bias; on top of that,
+        today's remaining hours are scaled by the intra-day weather residual so
+        a cloudy/sunny morning immediately reshapes the rest of today's curve.
+        """
+        today_str = now.date().isoformat() if now else None
+        residual = self.today_residual(today_str) if today_str else None
         out = {}
         for key, w in forecast_dict.items():
             try:
@@ -214,8 +258,17 @@ class SolarCalibration:
             except (ValueError, IndexError):
                 hour = None
             f = self._factors.get(hour, 1.0) if hour is not None else 1.0
-            out[key] = round(w * f, 1)
+            val = w * f
+            # Apply the weather residual only to the current/remaining hours of today.
+            if (residual is not None and now is not None and hour is not None
+                    and key[:10] == today_str and hour >= now.hour):
+                val *= residual
+            out[key] = round(val, 1)
         return out
+
+    @property
+    def today_factor(self) -> float | None:
+        return self.today_residual(datetime.now().date().isoformat())
 
     @property
     def hours_learned(self) -> int:
