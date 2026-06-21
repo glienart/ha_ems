@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -49,6 +50,45 @@ _solar_calib: SolarCalibration = SolarCalibration()
 _energy_logger: EnergyLogger = EnergyLogger()
 _meter_last: dict = {}   # role -> last cumulative kWh reading (for meter deltas)
 _schedule_task: Optional[asyncio.Task] = None
+
+# All-time EPEX price extremes (per zone), so the price chart can be coloured
+# against fixed historical bounds instead of each day's own min/max — a 0.05 €
+# slot then looks the same green whatever the rest of that particular day was.
+EPEX_EXTREMES_PATH = "/data/epex_extremes.json"
+_epex_extremes: dict = {}   # zone -> {"min": float, "max": float}
+
+
+def _load_epex_extremes() -> None:
+    global _epex_extremes
+    try:
+        if os.path.exists(EPEX_EXTREMES_PATH):
+            with open(EPEX_EXTREMES_PATH) as f:
+                _epex_extremes = json.load(f)
+    except Exception as exc:
+        _LOGGER.error("Failed to load EPEX extremes: %s", exc)
+        _epex_extremes = {}
+
+
+def _update_epex_extremes(zone: str, data: dict) -> None:
+    """Widen the stored min/max for `zone` with the freshly fetched prices."""
+    slots = (data.get("prices_today") or []) + (data.get("prices_tomorrow") or [])
+    vals = [s["price_eur_kwh"] for s in slots if s.get("price_eur_kwh") is not None]
+    if not vals:
+        return
+    cur = _epex_extremes.get(zone) or {}
+    lo = min([cur["min"]] + vals) if "min" in cur else min(vals)
+    hi = max([cur["max"]] + vals) if "max" in cur else max(vals)
+    if cur.get("min") == lo and cur.get("max") == hi:
+        return
+    _epex_extremes[zone] = {"min": round(lo, 6), "max": round(hi, 6)}
+    try:
+        with open(EPEX_EXTREMES_PATH, "w") as f:
+            json.dump(_epex_extremes, f)
+    except Exception as exc:
+        _LOGGER.error("Failed to save EPEX extremes: %s", exc)
+
+
+_load_epex_extremes()
 
 
 @asynccontextmanager
@@ -101,6 +141,7 @@ async def epex_loop():
             data = await fetch_prices(resolve_zone(_settings.epex_zone), _settings.epex_token)
             if data:
                 _epex_data = data
+                _update_epex_extremes(_settings.epex_zone, data)
                 await _publish_epex(data)
                 _LOGGER.info("EPEX price updated: %.4f EUR/kWh (zone %s)",
                              data.get("current_price") or 0, _settings.epex_zone)
@@ -142,7 +183,7 @@ async def rebuild_schedule() -> None:
     sell_prices = [{**p, "price_eur_kwh": p["price_eur_kwh"]*s.tariff_a_injection+s.tariff_b_injection} for p in all_epex]
     bat_soc = await ha_client.get_float(s.battery_soc_sensor, default=50.0) or 50.0
     # Keep _solar_forecast raw (for learning); feed the house-calibrated copy to the planner.
-    calibrated_solar = _solar_calib.apply(_solar_forecast) if _solar_forecast else {}
+    calibrated_solar = _solar_calib.apply(_solar_forecast, datetime.now()) if _solar_forecast else {}
     try:
         _schedule = build_schedule(
             now=datetime.now(),
@@ -426,6 +467,10 @@ async def api_epex():
         return JSONResponse({"error": "No EPEX data -- check token and zone in settings"})
     data = dict(_epex_data)
     data["zone"] = _settings.epex_zone  # so the dashboard can show the active zone
+    ext = _epex_extremes.get(_settings.epex_zone)
+    if ext:
+        data["hist_min"] = ext.get("min")
+        data["hist_max"] = ext.get("max")
     return JSONResponse(data)
 
 
@@ -456,6 +501,7 @@ async def api_forecast():
         "solar_calibration": {
             "mean_factor": _solar_calib.mean_factor,
             "hours_learned": _solar_calib.hours_learned,
+            "today_factor": _solar_calib.today_factor,
         },
     })
 
@@ -1199,7 +1245,7 @@ const I18N = {
         act_charge:'Charge', act_discharge:'Discharge', act_idle:'Idle',
         updated:'updated', solar_fc_on:'solar forecast', solar_fc_off:'no solar forecast',
         hist_ok:'consumption history OK', hist_default:'default consumption',
-        calib_learn:'solar calibration learning…', calib_home:'home calibration', calib_hours:'h learned',
+        calib_learn:'solar calibration learning…', calib_home:'home calibration', calib_hours:'h learned', calib_today:'today',
         cs_grid:'Grid', cs_house:'House', cs_solar:'Solar', cs_battery:'Battery', cs_consumed:'consumed', cs_produced:'produced',
         cs_revenue:'Revenue', cs_cost:'Expenses', cs_net:'Total', cs_exported_rev:'exported', cs_imported_cost:'imported', cs_net_sub:'net cost', cs_net_credit:'net credit', now:'Now',
         bars:'bars', error:'Error', real_vs_fc:'Real vs Forecast', real_solar:'Solar (actual)', real_conso:'Consumption (actual)' },
@@ -1213,7 +1259,7 @@ const I18N = {
         act_charge:'Charge', act_discharge:'Décharge', act_idle:'Repos',
         updated:'màj', solar_fc_on:'prévision solaire', solar_fc_off:'sans prévision solaire',
         hist_ok:'historique conso OK', hist_default:'conso par défaut',
-        calib_learn:'calibration solaire en apprentissage…', calib_home:'calibration maison', calib_hours:'h apprises',
+        calib_learn:'calibration solaire en apprentissage…', calib_home:'calibration maison', calib_hours:'h apprises', calib_today:'aujourd\\'hui',
         cs_grid:'Réseau', cs_house:'Maison', cs_solar:'Solaire', cs_battery:'Batterie', cs_consumed:'consommé', cs_produced:'produit',
         cs_revenue:'Revenu', cs_cost:'Dépenses', cs_net:'Total', cs_exported_rev:'exporté', cs_imported_cost:'importé', cs_net_sub:'coût net', cs_net_credit:'crédit net', now:'Auj.',
         bars:'barres', error:'Erreur', real_vs_fc:'Réel vs Prévisionnel', real_solar:'Solaire (réel)', real_conso:'Consommation (réelle)' },
@@ -1662,17 +1708,31 @@ function epexDay(day, btn) {
   drawEpexChart(slots); renderSchedule(slots);
 }
 
+// Colour bounds: prefer the all-time historical min/max (fixed reference) so a
+// cheap slot is always the same green regardless of the rest of the day; fall
+// back to the displayed day's own range until enough history is collected.
+function _priceBounds(slots) {
+  const d = _epexData || {};
+  if (d.hist_min != null && d.hist_max != null && d.hist_max > d.hist_min)
+    return { mn: d.hist_min, mx: d.hist_max };
+  return { mn: Math.min(...slots.map(s=>s.price_eur_kwh)), mx: Math.max(...slots.map(s=>s.price_eur_kwh)) };
+}
+// Continuous green→yellow→red gradient for a price within [mn, mx].
+function _priceColor(price, mn, mx, alpha) {
+  const r = mx>mn ? Math.max(0, Math.min(1, (price-mn)/(mx-mn))) : 0.5;
+  const hue = 120 * (1 - r);   // 120=green → 0=red, passing through yellow at 60
+  return 'hsla('+hue.toFixed(0)+',75%,45%,'+(alpha!=null?alpha:1)+')';
+}
+
 function drawEpexChart(slots) {
   if (!slots||!slots.length) return;
   const now = new Date();
-  const mn = Math.min(...slots.map(s=>s.price_eur_kwh));
-  const mx = Math.max(...slots.map(s=>s.price_eur_kwh));
+  const b = _priceBounds(slots);
   const labels = slots.map(s=>new Date(s.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));
   const vals   = slots.map(s=>+s.price_eur_kwh.toFixed(4));
   const colors = slots.map(s=>{
     if (new Date(s.start)<=now && now<new Date(s.end)) return 'rgba(245,158,11,.95)';
-    const r = mx>mn?(s.price_eur_kwh-mn)/(mx-mn):0.5;
-    return r<0.33?'rgba(16,185,129,.8)':r>0.66?'rgba(239,68,68,.8)':'rgba(245,158,11,.75)';
+    return _priceColor(s.price_eur_kwh, b.mn, b.mx, 0.8);
   });
   const ctx = document.getElementById('epexChart').getContext('2d');
   if (_epexChartInst) _epexChartInst.destroy();
@@ -1694,12 +1754,11 @@ function renderSchedule(slots) {
   const tbody = document.getElementById('sched-body');
   if (!slots||!slots.length){tbody.innerHTML='<tr><td colspan="3" style="color:var(--muted);text-align:center;padding:.5rem">No data</td></tr>';return;}
   const now=new Date();
-  const mn=Math.min(...slots.map(s=>s.price_eur_kwh));
-  const mx=Math.max(...slots.map(s=>s.price_eur_kwh));
+  const b=_priceBounds(slots);
   tbody.innerHTML=slots.map(s=>{
     const isCur=new Date(s.start)<=now&&now<new Date(s.end);
-    const pct=mx>mn?Math.round((s.price_eur_kwh-mn)/(mx-mn)*100):50;
-    const col=pct<33?'var(--green)':pct>66?'var(--red)':'var(--yellow)';
+    const pct=b.mx>b.mn?Math.round((s.price_eur_kwh-b.mn)/(b.mx-b.mn)*100):50;
+    const col=_priceColor(s.price_eur_kwh, b.mn, b.mx, 1);
     const t=new Date(s.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     return '<tr class="'+(isCur?'cur':'')+'"><td>'+t+'</td><td>'+s.price_eur_kwh.toFixed(4)+'</td><td><div class="pbar" style="width:'+Math.max(4,pct)+'%;background:'+col+'"></div></td></tr>';
   }).join('');
@@ -1775,9 +1834,11 @@ function renderForecast(d) {
   const fcCalib = document.getElementById('fc-calib');
   if (fcCalib) {
     const c = d.solar_calibration;
-    fcCalib.textContent = (c && c.hours_learned > 0)
+    let txt = (c && c.hours_learned > 0)
       ? '· ' + t('calib_home') + ' ×' + c.mean_factor + ' (' + c.hours_learned + ' ' + t('calib_hours') + ')'
       : '· ' + t('calib_learn');
+    if (c && c.today_factor != null) txt += ' · ' + t('calib_today') + ' ×' + c.today_factor.toFixed(2);
+    fcCalib.textContent = txt;
   }
   const cur = body.querySelector('tr.cur');
   if (cur) setTimeout(function(){ cur.scrollIntoView({block:'nearest'}); }, 100);
