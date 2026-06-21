@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.7
+
+### Changed
+- **Calibration solaire heure × mois (288 cellules)** : les facteurs de correction
+  structurels passent de 24 valeurs (une par heure) à 24 × 12 = 288 (une par heure
+  *et* par mois). Cela capture deux effets réels :
+  - **Position du soleil** : à 51 °N, la hauteur solaire à 08 h est ~10° en décembre
+    et ~35° en juin — un obstacle qui bloque le panel à faible angle n'impacte plus
+    rien en été.
+  - **Arbres à feuilles caduques** : un arbre au sud-est peut couper 60 % de la
+    production en août (feuilles pleines) et n'avoir aucun effet en février.
+  Migration automatique : les 24 anciens facteurs sont copiés sur les 12 mois comme
+  point de départ, sans perte d'apprentissage existant.
+
+## 0.6.6
+
+### Changed
+- **Refresh solaire de jour uniquement** : l'add-on calcule le lever et le coucher
+  du soleil via une formule astronomique (lat/lon, sans librairie externe) et ne
+  contacte Forecast.Solar que pendant la fenêtre diurne (±1 h de marge). L'intervalle
+  passe de 6 h à 2 h pour être plus réactif aux changements météo — sans dépasser
+  le quota de 12 appels/jour même en été (≤8 rafraîchissements sur 16 h de jour).
+- **Calibration long terme sur ciel clair seulement** : le facteur de correction
+  par heure (ombrage structurel des arbres, bâtiments) n'est mis à jour que
+  lorsque le résidu météo du jour est ≥ 0,80. Sur les journées nuageuses, la
+  production basse vient des nuages, pas de l'ombrage, et ne doit pas contaminer
+  le signal d'apprentissage. La correction intra-journalière (météo du jour) reste
+  active tous les jours quel que soit le temps.
+
 ## 0.6.5
 
 ### Changed

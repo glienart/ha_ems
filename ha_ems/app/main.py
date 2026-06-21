@@ -23,7 +23,7 @@ from .energy_html import ENERGY_HTML
 from .energy_log import EnergyLogger
 from .epex import fetch_prices, resolve_zone
 from .optimizer import EmsOptimizer, EmsSnapshot, EvSnapshot
-from .forecast import fetch_solar_forecast, ConsumptionHistory, SolarCalibration
+from .forecast import fetch_solar_forecast, ConsumptionHistory, SolarCalibration, is_daylight, solar_window
 from .scheduler import build_schedule, current_scheduled_action
 from .settings import EmsSettings
 
@@ -41,10 +41,11 @@ _solar_fetched_at: Optional[datetime] = None
 _schedule: list = []
 _schedule_built_at: Optional[str] = None
 
-# Forecast.Solar free tier is heavily rate-limited (~12 calls/day), so we cache
-# the forecast and only refresh it every few hours instead of on every schedule
-# rebuild (which runs every 30 min).
-SOLAR_REFRESH_INTERVAL = timedelta(hours=6)
+# Forecast.Solar free tier is limited to ~12 calls/day per lat/lon.
+# We only refresh during daylight hours (no point fetching at 03:00), and
+# space calls ~2 h apart to stay well within the quota while still adapting
+# to rapidly changing weather.
+SOLAR_REFRESH_INTERVAL = timedelta(hours=2)
 _consumption_history: ConsumptionHistory = ConsumptionHistory()
 _solar_calib: SolarCalibration = SolarCalibration()
 _energy_logger: EnergyLogger = EnergyLogger()
@@ -163,7 +164,12 @@ async def rebuild_schedule() -> None:
             or not _solar_forecast
             or (now - _solar_fetched_at) >= SOLAR_REFRESH_INTERVAL
         )
-        if stale:
+        day = is_daylight(s.latitude, s.longitude, now, margin_h=1.0)
+        if stale and (day or not _solar_forecast):
+            # During the night we keep the last known forecast; we do allow one
+            # fetch before sunrise (margin_h=1 h) so the first schedule of the
+            # day already has fresh data, and one more just after sunset so the
+            # evening slots are correctly priced.
             try:
                 fc = await fetch_solar_forecast(
                     s.latitude, s.longitude, s.panel_tilt, s.panel_azimuth, s.panel_kwp
@@ -171,6 +177,10 @@ async def rebuild_schedule() -> None:
                 if fc:  # keep the previous forecast on empty/error (e.g. 429)
                     _solar_forecast = fc
                     _solar_fetched_at = now
+                    sr, ss = solar_window(s.latitude, s.longitude, now)
+                    _LOGGER.info(
+                        "Solar forecast refreshed (daylight=%.1f..%.1f h, margin±1h)", sr, ss
+                    )
             except Exception as exc:
                 _LOGGER.error("Solar forecast error: %s", exc)
     if not _epex_data:
@@ -501,6 +511,7 @@ async def api_forecast():
         "solar_calibration": {
             "mean_factor": _solar_calib.mean_factor,
             "hours_learned": _solar_calib.hours_learned,
+            "cells_learned": _solar_calib.cells_learned,
             "today_factor": _solar_calib.today_factor,
         },
     })
@@ -789,7 +800,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .day-toggle{display:flex;gap:.4rem}
   .day-btn{padding:.2rem .6rem;border-radius:.4rem;border:1px solid var(--border);background:none;color:var(--muted);cursor:pointer;font-size:.75rem}
   .day-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
-  .hist-controls{display:flex;justify-content:space-between;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:.75rem}
+  .hist-controls{display:flex;flex-direction:column;align-items:center;gap:.5rem;margin-bottom:.75rem}
+  .hist-controls-row{display:flex;justify-content:center;align-items:center;gap:.4rem}
   .hist-nav{display:flex;align-items:center;gap:.4rem}
   .hist-date{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:.3rem .5rem;border-radius:.4rem;font-size:.8rem}
   /* HA-style energy period selector */
@@ -1095,7 +1107,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
   <!-- Global history filter — drives both charts above -->
   <div class="hist-controls">
-    <div class="day-toggle">
+    <div class="hist-controls-row">
       <button class="day-btn active" data-period="hourly"  data-i18n="p_hour" onclick="setHistPeriod('hourly',this)">Hour</button>
       <button class="day-btn"        data-period="daily"   data-i18n="p_day"  onclick="setHistPeriod('daily',this)">Day</button>
       <button class="day-btn"        data-period="monthly" data-i18n="p_year" onclick="setHistPeriod('monthly',this)">Year</button>
@@ -1178,7 +1190,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 
   <!-- Réel vs Prévisionnel -->
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:.75rem;margin-bottom:.3rem">
+  <div style="display:flex;flex-direction:column;align-items:center;gap:.5rem;margin-top:.75rem;margin-bottom:.3rem">
     <div class="section-title" style="margin:0" data-i18n="real_vs_fc">R&eacute;el vs Pr&eacute;visionnel</div>
     <div class="ha-period">
       <button class="ha-icon-btn" title="Select date">
@@ -1245,7 +1257,7 @@ const I18N = {
         act_charge:'Charge', act_discharge:'Discharge', act_idle:'Idle',
         updated:'updated', solar_fc_on:'solar forecast', solar_fc_off:'no solar forecast',
         hist_ok:'consumption history OK', hist_default:'default consumption',
-        calib_learn:'solar calibration learning…', calib_home:'home calibration', calib_hours:'h learned', calib_today:'today',
+        calib_learn:'solar calibration learning…', calib_home:'home calibration', calib_cells:'cells learned', calib_today:'today',
         cs_grid:'Grid', cs_house:'House', cs_solar:'Solar', cs_battery:'Battery', cs_consumed:'consumed', cs_produced:'produced',
         cs_revenue:'Revenue', cs_cost:'Expenses', cs_net:'Total', cs_exported_rev:'exported', cs_imported_cost:'imported', cs_net_sub:'net cost', cs_net_credit:'net credit', now:'Now',
         bars:'bars', error:'Error', real_vs_fc:'Real vs Forecast', real_solar:'Solar (actual)', real_conso:'Consumption (actual)' },
@@ -1259,7 +1271,7 @@ const I18N = {
         act_charge:'Charge', act_discharge:'Décharge', act_idle:'Repos',
         updated:'màj', solar_fc_on:'prévision solaire', solar_fc_off:'sans prévision solaire',
         hist_ok:'historique conso OK', hist_default:'conso par défaut',
-        calib_learn:'calibration solaire en apprentissage…', calib_home:'calibration maison', calib_hours:'h apprises', calib_today:'aujourd\\'hui',
+        calib_learn:'calibration solaire en apprentissage…', calib_home:'calibration maison', calib_cells:'cellules apprises', calib_today:'aujourd\\'hui',
         cs_grid:'Réseau', cs_house:'Maison', cs_solar:'Solaire', cs_battery:'Batterie', cs_consumed:'consommé', cs_produced:'produit',
         cs_revenue:'Revenu', cs_cost:'Dépenses', cs_net:'Total', cs_exported_rev:'exporté', cs_imported_cost:'importé', cs_net_sub:'coût net', cs_net_credit:'crédit net', now:'Auj.',
         bars:'barres', error:'Erreur', real_vs_fc:'Réel vs Prévisionnel', real_solar:'Solaire (réel)', real_conso:'Consommation (réelle)' },
@@ -1834,8 +1846,8 @@ function renderForecast(d) {
   const fcCalib = document.getElementById('fc-calib');
   if (fcCalib) {
     const c = d.solar_calibration;
-    let txt = (c && c.hours_learned > 0)
-      ? '· ' + t('calib_home') + ' ×' + c.mean_factor + ' (' + c.hours_learned + ' ' + t('calib_hours') + ')'
+    let txt = (c && c.cells_learned > 0)
+      ? '· ' + t('calib_home') + ' ×' + c.mean_factor + ' (' + c.cells_learned + ' ' + t('calib_cells') + ')'
       : '· ' + t('calib_learn');
     if (c && c.today_factor != null) txt += ' · ' + t('calib_today') + ' ×' + c.today_factor.toFixed(2);
     fcCalib.textContent = txt;
@@ -1870,7 +1882,7 @@ function stepAnalysisDate(dir) {
   if (inp) inp.value = _analysisDate;
   loadAnalysisComparison();
 }
-function analysisToday(){ _analysisDate=_isoDate(new Date()); const inp=document.getElementById('analysisDate'); if(inp) inp.value=_analysisDate; loadAnalysisComparison(); }
+function analysisToday(){ _analysisDate=_isoDate(new Date()); const inp=document.getElementById('analysisDate'); if(inp) inp.value=_analysisDate; _updateLabel('analysisDateLabel',_analysisDate,'hourly'); loadAnalysisComparison(); }
 
 function renderComparisonChart(hist, fc) {
   const ctx = document.getElementById('comparisonChart');
@@ -2060,7 +2072,7 @@ async function loadEnergyHistory() {
     renderKwhChart(data); renderPriceChart(data); renderConsumptionTotals(data.totals || {});
   } catch(e) { const el=document.getElementById('kwh-updated'); if(el) el.textContent=t('error'); }
 }
-function histToday(){ _histDate=_isoDate(new Date()); const inp=document.getElementById('histDate'); if(inp) inp.value=_histDate; loadEnergyHistory(); }
+function histToday(){ _histDate=_isoDate(new Date()); const inp=document.getElementById('histDate'); if(inp) inp.value=_histDate; _updateLabel('histDateLabel',_histDate,_histPeriod); loadEnergyHistory(); }
 function renderConsumptionTotals(tt) {
   const kwh = v => (v != null ? (+v).toFixed(2) : '--') + ' kWh';
   const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
