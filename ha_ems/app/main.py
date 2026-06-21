@@ -511,6 +511,7 @@ async def api_forecast():
         "solar_calibration": {
             "mean_factor": _solar_calib.mean_factor,
             "hours_learned": _solar_calib.hours_learned,
+            "cells_learned": _solar_calib.cells_learned,
             "today_factor": _solar_calib.today_factor,
         },
     })
@@ -1255,7 +1256,7 @@ const I18N = {
         act_charge:'Charge', act_discharge:'Discharge', act_idle:'Idle',
         updated:'updated', solar_fc_on:'solar forecast', solar_fc_off:'no solar forecast',
         hist_ok:'consumption history OK', hist_default:'default consumption',
-        calib_learn:'solar calibration learning…', calib_home:'home calibration', calib_hours:'h learned', calib_today:'today',
+        calib_learn:'solar calibration learning…', calib_home:'home calibration', calib_cells:'cells learned', calib_today:'today',
         cs_grid:'Grid', cs_house:'House', cs_solar:'Solar', cs_battery:'Battery', cs_consumed:'consumed', cs_produced:'produced',
         cs_revenue:'Revenue', cs_cost:'Expenses', cs_net:'Total', cs_exported_rev:'exported', cs_imported_cost:'imported', cs_net_sub:'net cost', cs_net_credit:'net credit', now:'Now',
         bars:'bars', error:'Error', real_vs_fc:'Real vs Forecast', real_solar:'Solar (actual)', real_conso:'Consumption (actual)' },
@@ -1269,7 +1270,7 @@ const I18N = {
         act_charge:'Charge', act_discharge:'Décharge', act_idle:'Repos',
         updated:'màj', solar_fc_on:'prévision solaire', solar_fc_off:'sans prévision solaire',
         hist_ok:'historique conso OK', hist_default:'conso par défaut',
-        calib_learn:'calibration solaire en apprentissage…', calib_home:'calibration maison', calib_hours:'h apprises', calib_today:'aujourd\\'hui',
+        calib_learn:'calibration solaire en apprentissage…', calib_home:'calibration maison', calib_cells:'cellules apprises', calib_today:'aujourd\\'hui',
         cs_grid:'Réseau', cs_house:'Maison', cs_solar:'Solaire', cs_battery:'Batterie', cs_consumed:'consommé', cs_produced:'produit',
         cs_revenue:'Revenu', cs_cost:'Dépenses', cs_net:'Total', cs_exported_rev:'exporté', cs_imported_cost:'importé', cs_net_sub:'coût net', cs_net_credit:'crédit net', now:'Auj.',
         bars:'barres', error:'Erreur', real_vs_fc:'Réel vs Prévisionnel', real_solar:'Solaire (réel)', real_conso:'Consommation (réelle)' },
@@ -1844,8 +1845,8 @@ function renderForecast(d) {
   const fcCalib = document.getElementById('fc-calib');
   if (fcCalib) {
     const c = d.solar_calibration;
-    let txt = (c && c.hours_learned > 0)
-      ? '· ' + t('calib_home') + ' ×' + c.mean_factor + ' (' + c.hours_learned + ' ' + t('calib_hours') + ')'
+    let txt = (c && c.cells_learned > 0)
+      ? '· ' + t('calib_home') + ' ×' + c.mean_factor + ' (' + c.cells_learned + ' ' + t('calib_cells') + ')'
       : '· ' + t('calib_learn');
     if (c && c.today_factor != null) txt += ' · ' + t('calib_today') + ' ×' + c.today_factor.toFixed(2);
     fcCalib.textContent = txt;
