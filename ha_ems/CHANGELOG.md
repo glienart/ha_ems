@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.2
+
+### Added
+- **Comparatif Réel vs Prévisionnel** sur l'onglet **Analysis** : graphique
+  combiné barres + lignes affichant le solaire et la consommation réels (kWh
+  mesurés) avec, en superposition pointillée, les prévisions du plan 24h (quand
+  la date sélectionnée est aujourd'hui).
+- **Sélecteur de date** sur **Analysis** (boutons précédent/suivant + champ date)
+  pour naviguer jour par jour, comme sur l'onglet Consumption.
+
+### Changed
+- **Add-on** : suppression de `ingress_port` (valeur par défaut 8099), passage au
+  nouveau format `map` (`type: data` / `read_only`), et retrait des architectures
+  dépréciées `armhf` et `armv7` (non supportées depuis Home Assistant 2025.12).
+
 ## 0.6.1
 
 ### Added
@@ -31,7 +46,6 @@
 - kWh & € mesurés depuis de vrais **capteurs d'énergie** HA configurables
   (réseau import/export, production, conso, **recharge VE**) au lieu d'être
   calculés par intégration de la puissance — corrige la conso « linéaire ».
-- **Comparatif réel vs prévisionnel** + sélecteur de date sur Analysis.
 
 ## 0.5.33
 
