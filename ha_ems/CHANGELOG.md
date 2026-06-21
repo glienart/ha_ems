@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.4
+
+### Changed
+- **Sélecteur de date façon Home Assistant** sur les onglets **Consumption** et
+  **Analysis** : barre avec icône calendrier (ouvre le sélecteur natif), bouton
+  **Auj.** pour revenir à aujourd'hui, chevrons précédent/suivant et libellé de
+  période centré (jour / mois / année selon l'agrégation choisie).
+
 ## 0.6.3
 
 ### Added

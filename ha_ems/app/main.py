@@ -746,6 +746,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .hist-controls{display:flex;justify-content:space-between;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:.75rem}
   .hist-nav{display:flex;align-items:center;gap:.4rem}
   .hist-date{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:.3rem .5rem;border-radius:.4rem;font-size:.8rem}
+  /* HA-style energy period selector */
+  .ha-period{display:flex;align-items:center;gap:.4rem;background:var(--card);border:1px solid var(--border);border-radius:.7rem;padding:.3rem .45rem}
+  .ha-period-label{min-width:5.5rem;text-align:center;font-weight:600;font-size:.92rem;color:var(--text);white-space:nowrap}
+  .ha-icon-btn{position:relative;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:none;background:none;color:var(--accent);cursor:pointer;border-radius:50%;flex:none}
+  .ha-icon-btn:hover{background:rgba(127,127,127,.14)}
+  .ha-icon-btn svg{width:22px;height:22px;fill:currentColor;pointer-events:none}
+  .ha-icon-btn input[type=date]{position:absolute;inset:0;width:100%;height:100%;opacity:0;border:none;cursor:pointer;padding:0}
+  .ha-now-btn{padding:.25rem .75rem;border-radius:1rem;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;font-size:.78rem;font-weight:600}
+  .ha-now-btn:hover{filter:brightness(1.08)}
   .chart-wrap{position:relative;height:160px;margin-bottom:.5rem}
   .price-table{width:100%;border-collapse:collapse;font-size:.75rem}
   .price-table th{color:var(--muted);font-size:.62rem;text-transform:uppercase;padding:.25rem .4rem;border-bottom:1px solid var(--border);text-align:left;position:sticky;top:0;background:var(--card)}
@@ -1045,10 +1054,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <button class="day-btn"        data-period="daily"   data-i18n="p_day"  onclick="setHistPeriod('daily',this)">Day</button>
       <button class="day-btn"        data-period="monthly" data-i18n="p_year" onclick="setHistPeriod('monthly',this)">Year</button>
     </div>
-    <div class="hist-nav">
-      <button class="day-btn" onclick="stepHist(-1)" title="Previous">&#8249;</button>
-      <input type="date" id="histDate" class="hist-date" onchange="loadEnergyHistory()">
-      <button class="day-btn" onclick="stepHist(1)" title="Next">&#8250;</button>
+    <div class="ha-period">
+      <button class="ha-icon-btn" title="Select date">
+        <svg viewBox="0 0 24 24"><path d="M19,19H5V8H19M16,1V3H8V1H6V3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3H18V1M17,12H12V17H17V12Z"/></svg>
+        <input type="date" id="histDate" onclick="this.showPicker&&this.showPicker()" onchange="loadEnergyHistory()">
+      </button>
+      <button class="ha-now-btn" data-i18n="now" onclick="histToday()">Now</button>
+      <button class="ha-icon-btn" onclick="stepHist(-1)" title="Previous">
+        <svg viewBox="0 0 24 24"><path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/></svg>
+      </button>
+      <div class="ha-period-label" id="histDateLabel">--</div>
+      <button class="ha-icon-btn" onclick="stepHist(1)" title="Next">
+        <svg viewBox="0 0 24 24"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
+      </button>
     </div>
   </div>
 </div>
@@ -1116,10 +1134,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <!-- Réel vs Prévisionnel -->
   <div style="display:flex;justify-content:space-between;align-items:center;margin-top:.75rem;margin-bottom:.3rem">
     <div class="section-title" style="margin:0" data-i18n="real_vs_fc">R&eacute;el vs Pr&eacute;visionnel</div>
-    <div class="hist-nav">
-      <button class="day-btn" onclick="stepAnalysisDate(-1)" title="Previous">&#8249;</button>
-      <input type="date" id="analysisDate" class="hist-date" onchange="loadAnalysisComparison()">
-      <button class="day-btn" onclick="stepAnalysisDate(1)" title="Next">&#8250;</button>
+    <div class="ha-period">
+      <button class="ha-icon-btn" title="Select date">
+        <svg viewBox="0 0 24 24"><path d="M19,19H5V8H19M16,1V3H8V1H6V3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3H18V1M17,12H12V17H17V12Z"/></svg>
+        <input type="date" id="analysisDate" onclick="this.showPicker&&this.showPicker()" onchange="loadAnalysisComparison()">
+      </button>
+      <button class="ha-now-btn" data-i18n="now" onclick="analysisToday()">Now</button>
+      <button class="ha-icon-btn" onclick="stepAnalysisDate(-1)" title="Previous">
+        <svg viewBox="0 0 24 24"><path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/></svg>
+      </button>
+      <div class="ha-period-label" id="analysisDateLabel">--</div>
+      <button class="ha-icon-btn" onclick="stepAnalysisDate(1)" title="Next">
+        <svg viewBox="0 0 24 24"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
+      </button>
     </div>
   </div>
   <div class="card">
@@ -1174,7 +1201,7 @@ const I18N = {
         hist_ok:'consumption history OK', hist_default:'default consumption',
         calib_learn:'solar calibration learning…', calib_home:'home calibration', calib_hours:'h learned',
         cs_grid:'Grid', cs_house:'House', cs_solar:'Solar', cs_battery:'Battery', cs_consumed:'consumed', cs_produced:'produced',
-        cs_revenue:'Revenue', cs_cost:'Expenses', cs_net:'Total', cs_exported_rev:'exported', cs_imported_cost:'imported', cs_net_sub:'net cost', cs_net_credit:'net credit',
+        cs_revenue:'Revenue', cs_cost:'Expenses', cs_net:'Total', cs_exported_rev:'exported', cs_imported_cost:'imported', cs_net_sub:'net cost', cs_net_credit:'net credit', now:'Now',
         bars:'bars', error:'Error', real_vs_fc:'Real vs Forecast', real_solar:'Solar (actual)', real_conso:'Consumption (actual)' },
   fr: { tab_live:'Live', tab_consumption:'Consommation', tab_analysis:'Analyse',
         mode:'Mode', live_readings:'Mesures en direct', decisions:'Décisions', last_reason:'Dernière décision',
@@ -1188,7 +1215,7 @@ const I18N = {
         hist_ok:'historique conso OK', hist_default:'conso par défaut',
         calib_learn:'calibration solaire en apprentissage…', calib_home:'calibration maison', calib_hours:'h apprises',
         cs_grid:'Réseau', cs_house:'Maison', cs_solar:'Solaire', cs_battery:'Batterie', cs_consumed:'consommé', cs_produced:'produit',
-        cs_revenue:'Revenu', cs_cost:'Dépenses', cs_net:'Total', cs_exported_rev:'exporté', cs_imported_cost:'importé', cs_net_sub:'coût net', cs_net_credit:'crédit net',
+        cs_revenue:'Revenu', cs_cost:'Dépenses', cs_net:'Total', cs_exported_rev:'exporté', cs_imported_cost:'importé', cs_net_sub:'coût net', cs_net_credit:'crédit net', now:'Auj.',
         bars:'barres', error:'Erreur', real_vs_fc:'Réel vs Prévisionnel', real_solar:'Solaire (réel)', real_conso:'Consommation (réelle)' },
 };
 const LANG = (function(){ try { const l=(window.parent.document.documentElement.lang||navigator.language||'en').slice(0,2).toLowerCase(); return I18N[l]?l:'en'; } catch(e){ return 'en'; } })();
@@ -1764,6 +1791,7 @@ async function loadAnalysisComparison() {
   const inp = document.getElementById('analysisDate');
   if (inp) { if (!inp.value) inp.value = _analysisDate || _isoDate(new Date()); _analysisDate = inp.value; }
   else if (!_analysisDate) _analysisDate = _isoDate(new Date());
+  _updateLabel('analysisDateLabel', _analysisDate, 'hourly');
   const today = _isoDate(new Date());
   try {
     const hist = await fetch(BASE+'/api/energy/history?period=hourly&date='+_analysisDate).then(r=>r.json());
@@ -1781,6 +1809,7 @@ function stepAnalysisDate(dir) {
   if (inp) inp.value = _analysisDate;
   loadAnalysisComparison();
 }
+function analysisToday(){ _analysisDate=_isoDate(new Date()); const inp=document.getElementById('analysisDate'); if(inp) inp.value=_analysisDate; loadAnalysisComparison(); }
 
 function renderComparisonChart(hist, fc) {
   const ctx = document.getElementById('comparisonChart');
@@ -1951,15 +1980,26 @@ setInterval(loadPowerChart, 10 * 60 * 1000);
 // ── Energy history (Consommation & Coût): ONE global period + date for both charts ──
 let _histPeriod = 'hourly', _histDate = '', _kwhChartInst = null, _priceChartInst = null;
 function _isoDate(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+// HA-style centred period label, adapted to the active aggregation level.
+function _fmtPeriodLabel(dateStr, period){
+  const d = new Date((dateStr||_isoDate(new Date()))+'T00:00:00');
+  const loc = (LANG==='fr'?'fr-FR':undefined);
+  if (period==='monthly') return String(d.getFullYear());
+  if (period==='daily')   return d.toLocaleDateString(loc,{month:'short',year:'numeric'});
+  return d.toLocaleDateString(loc,{day:'numeric',month:'short',year:'numeric'});
+}
+function _updateLabel(id, dateStr, period){ const el=document.getElementById(id); if(el) el.textContent=_fmtPeriodLabel(dateStr,period); }
 async function loadEnergyHistory() {
   const inp = document.getElementById('histDate');
   if (inp) { if (!inp.value) inp.value = _histDate || _isoDate(new Date()); _histDate = inp.value; }
   else if (!_histDate) { _histDate = _isoDate(new Date()); }
+  _updateLabel('histDateLabel', _histDate, _histPeriod);
   try {
     const data = await fetch(BASE+'/api/energy/history?period='+_histPeriod+'&date='+_histDate).then(r=>r.json());
     renderKwhChart(data); renderPriceChart(data); renderConsumptionTotals(data.totals || {});
   } catch(e) { const el=document.getElementById('kwh-updated'); if(el) el.textContent=t('error'); }
 }
+function histToday(){ _histDate=_isoDate(new Date()); const inp=document.getElementById('histDate'); if(inp) inp.value=_histDate; loadEnergyHistory(); }
 function renderConsumptionTotals(tt) {
   const kwh = v => (v != null ? (+v).toFixed(2) : '--') + ' kWh';
   const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
