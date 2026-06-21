@@ -23,7 +23,7 @@ from .energy_html import ENERGY_HTML
 from .energy_log import EnergyLogger
 from .epex import fetch_prices, resolve_zone
 from .optimizer import EmsOptimizer, EmsSnapshot, EvSnapshot
-from .forecast import fetch_solar_forecast, ConsumptionHistory, SolarCalibration
+from .forecast import fetch_solar_forecast, ConsumptionHistory, SolarCalibration, is_daylight, solar_window
 from .scheduler import build_schedule, current_scheduled_action
 from .settings import EmsSettings
 
@@ -41,10 +41,11 @@ _solar_fetched_at: Optional[datetime] = None
 _schedule: list = []
 _schedule_built_at: Optional[str] = None
 
-# Forecast.Solar free tier is heavily rate-limited (~12 calls/day), so we cache
-# the forecast and only refresh it every few hours instead of on every schedule
-# rebuild (which runs every 30 min).
-SOLAR_REFRESH_INTERVAL = timedelta(hours=6)
+# Forecast.Solar free tier is limited to ~12 calls/day per lat/lon.
+# We only refresh during daylight hours (no point fetching at 03:00), and
+# space calls ~2 h apart to stay well within the quota while still adapting
+# to rapidly changing weather.
+SOLAR_REFRESH_INTERVAL = timedelta(hours=2)
 _consumption_history: ConsumptionHistory = ConsumptionHistory()
 _solar_calib: SolarCalibration = SolarCalibration()
 _energy_logger: EnergyLogger = EnergyLogger()
@@ -163,7 +164,12 @@ async def rebuild_schedule() -> None:
             or not _solar_forecast
             or (now - _solar_fetched_at) >= SOLAR_REFRESH_INTERVAL
         )
-        if stale:
+        day = is_daylight(s.latitude, s.longitude, now, margin_h=1.0)
+        if stale and (day or not _solar_forecast):
+            # During the night we keep the last known forecast; we do allow one
+            # fetch before sunrise (margin_h=1 h) so the first schedule of the
+            # day already has fresh data, and one more just after sunset so the
+            # evening slots are correctly priced.
             try:
                 fc = await fetch_solar_forecast(
                     s.latitude, s.longitude, s.panel_tilt, s.panel_azimuth, s.panel_kwp
@@ -171,6 +177,10 @@ async def rebuild_schedule() -> None:
                 if fc:  # keep the previous forecast on empty/error (e.g. 429)
                     _solar_forecast = fc
                     _solar_fetched_at = now
+                    sr, ss = solar_window(s.latitude, s.longitude, now)
+                    _LOGGER.info(
+                        "Solar forecast refreshed (daylight=%.1f..%.1f h, margin±1h)", sr, ss
+                    )
             except Exception as exc:
                 _LOGGER.error("Solar forecast error: %s", exc)
     if not _epex_data:

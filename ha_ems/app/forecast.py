@@ -1,5 +1,5 @@
 """
-Solar production forecast, consumption history and solar self-calibration for HA EMS v0.6.0.
+Solar production forecast, consumption history and solar self-calibration for HA EMS.
 
 Solar forecast: Forecast.Solar API (free, no API key required).
   GET https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -20,10 +21,14 @@ _LOGGER = logging.getLogger(__name__)
 FORECAST_SOLAR_BASE = "https://api.forecast.solar/estimate"
 CONSUMPTION_PATH = "/data/consumption_history.json"
 SOLAR_CALIB_PATH = "/data/solar_calibration.json"
-CALIB_ALPHA = 0.15      # EMA learning rate (slow, robust to noisy days)
-CALIB_MIN_FC_W = 100    # ignore hours where the forecast is essentially night
-CALIB_MIN_RATIO = 0.2   # clamp the per-hour correction to a sane band
+CALIB_ALPHA = 0.15        # EMA learning rate (slow, robust to noisy days)
+CALIB_MIN_FC_W = 100      # ignore hours where the forecast is essentially night
+CALIB_MIN_RATIO = 0.2     # clamp the per-hour correction to a sane band
 CALIB_MAX_RATIO = 3.0
+# Only update the long-term per-hour factors (structural shading) when today
+# looks like a clear-sky day.  Cloudy days have a low weather residual that
+# would contaminate the shading signal, so we skip the EMA update for them.
+CALIB_CLEAR_SKY_MIN = 0.80  # residual >= this → day is clear enough to learn from
 # Intra-day (weather) residual: how today's real production compares to what
 # the calibrated forecast predicted for the daylight hours already elapsed.
 # Applied to the remaining hours of *today* so a cloudy/sunny day is tracked
@@ -31,6 +36,43 @@ CALIB_MAX_RATIO = 3.0
 TODAY_MIN_EXP_WH = 300.0  # need some meaningful elapsed daylight before trusting it
 TODAY_MIN_RATIO = 0.3
 TODAY_MAX_RATIO = 1.8
+
+
+def solar_window(lat: float, lon: float, dt: "datetime | None" = None) -> tuple[float, float]:
+    """Return (sunrise_hour, sunset_hour) in local *wall-clock* hours for `dt`
+    (defaults to today) using the standard approximate formula (±5 min accuracy).
+
+    Both values are in [0, 24).  Returns (6.0, 20.0) if lat/lon are not set.
+    """
+    if lat == 0.0 and lon == 0.0:
+        return 6.0, 20.0
+    if dt is None:
+        from datetime import date
+        dt = datetime.combine(date.today(), datetime.min.time())
+    # Day-of-year
+    n = dt.timetuple().tm_yday
+    # Declination (degrees)
+    decl = 23.45 * math.sin(math.radians((360 / 365) * (n - 81)))
+    # Hour-angle at sunrise (degrees) — standard formula
+    cos_ha = -(math.tan(math.radians(lat)) * math.tan(math.radians(decl)))
+    cos_ha = max(-1.0, min(1.0, cos_ha))   # clamp for polar edge cases
+    ha = math.degrees(math.acos(cos_ha))   # in [0, 180]
+    # UTC hours of sunrise/sunset
+    sr_utc = 12.0 - ha / 15.0
+    ss_utc = 12.0 + ha / 15.0
+    # Approximate local offset via longitude (UTC+lon/15), ignoring DST.
+    # Good enough for the purpose of "don't call the API at 03:00".
+    tz_offset = lon / 15.0
+    return sr_utc + tz_offset, ss_utc + tz_offset
+
+
+def is_daylight(lat: float, lon: float, dt: "datetime | None" = None, margin_h: float = 0.5) -> bool:
+    """True if `dt` (default: now) is within the solar window (with `margin_h` buffer)."""
+    if dt is None:
+        dt = datetime.now()
+    sr, ss = solar_window(lat, lon, dt)
+    h = dt.hour + dt.minute / 60.0
+    return (sr - margin_h) <= h <= (ss + margin_h)
 
 
 async def fetch_solar_forecast(
@@ -219,11 +261,19 @@ class SolarCalibration:
             return
         avg = c["sum"] / c["n"]
         old = self._factors.get(c["hour"], 1.0)
+        # Feed today's running weather residual first (always, any weather).
+        self._accumulate_today(c.get("date"), avg, c["fc"] * old)
+        # Update the long-term per-hour shading factor ONLY on clear-sky days.
+        # On cloudy days the ratio reflects clouds, not structural shading, and
+        # would corrupt the shading signal we're trying to learn.
+        residual = self.today_residual(c.get("date"))
+        if residual is not None and residual < CALIB_CLEAR_SKY_MIN:
+            _LOGGER.debug(
+                "Calib hour %02d skipped (cloudy day, residual=%.2f)", c["hour"], residual
+            )
+            return
         ratio = max(CALIB_MIN_RATIO, min(CALIB_MAX_RATIO, avg / c["fc"]))
         self._factors[c["hour"]] = round((1 - self._alpha) * old + self._alpha * ratio, 4)
-        # Feed today's running weather residual: real vs what the *calibrated*
-        # forecast (fc × per-hour factor we'd have used) predicted for this hour.
-        self._accumulate_today(c.get("date"), avg, c["fc"] * old)
 
     def _accumulate_today(self, date_str, actual_w: float, expected_w: float) -> None:
         if not date_str or expected_w <= 0:

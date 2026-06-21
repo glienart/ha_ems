@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.6
+
+### Changed
+- **Refresh solaire de jour uniquement** : l'add-on calcule le lever et le coucher
+  du soleil via une formule astronomique (lat/lon, sans librairie externe) et ne
+  contacte Forecast.Solar que pendant la fenêtre diurne (±1 h de marge). L'intervalle
+  passe de 6 h à 2 h pour être plus réactif aux changements météo — sans dépasser
+  le quota de 12 appels/jour même en été (≤8 rafraîchissements sur 16 h de jour).
+- **Calibration long terme sur ciel clair seulement** : le facteur de correction
+  par heure (ombrage structurel des arbres, bâtiments) n'est mis à jour que
+  lorsque le résidu météo du jour est ≥ 0,80. Sur les journées nuageuses, la
+  production basse vient des nuages, pas de l'ombrage, et ne doit pas contaminer
+  le signal d'apprentissage. La correction intra-journalière (météo du jour) reste
+  active tous les jours quel que soit le temps.
+
 ## 0.6.5
 
 ### Changed
