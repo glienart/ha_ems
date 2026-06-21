@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.9
+
+### Fixed
+- **Tests de calibration solaire** : mise à jour de `test_solar_calib.py` pour la
+  nouvelle API. `factor()` prend désormais `(heure, mois)` et l'apprentissage long
+  terme n'a lieu que sur les journées de ciel clair (résidu ≥ 0,80). Les scénarios
+  d'apprentissage utilisent maintenant une journée claire (production = 90 % de la
+  prévision) et un nouveau test vérifie qu'une journée nuageuse ne contamine pas le
+  facteur structurel.
+
+## 0.6.8
+
+### Fixed
+- **Sélecteur de date centré** : la barre de période et le sélecteur de date sont
+  empilés et centrés sous les graphes ; le libellé de date se met à jour au clic
+  sur « Maintenant ».
+
 ## 0.6.7
 
 ### Changed
