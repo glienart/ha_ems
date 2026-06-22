@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.10
+
+### Changed
+- **Créneau EPEX en cours en bleu (dashboard principal)** : sur le graphe
+  Day-ahead du tableau de bord principal, le créneau actuel passe de l'orange
+  (`rgba(245,158,11)`, confondu avec un prix élevé) au **bleu** (`rgba(37,99,235)`)
+  avec une bordure bleu foncé, hors du dégradé vert→rouge des prix. Aligne le
+  comportement sur le graphe EPEX de la page Energy (0.6.x).
+
 ## 0.6.9
 
 ### Fixed
