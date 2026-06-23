@@ -126,16 +126,42 @@ class EnergyLogger:
 
     # ── Aggregation ───────────────────────────────────────────────────────────
 
-    def get_history(self, period: str = "hourly", date: str | None = None) -> dict:
-        """
-        Aggregate hourly buckets into bars, anchored on a chosen date.
+    @staticmethod
+    def _result_from_agg(agg: dict) -> tuple[list, dict]:
+        """Turn a {agg_key: {field: value}} map into (sorted items, totals)."""
+        def _round(k, v):
+            return round(v, 4) if k in ("cost", "revenue") else round(v, 3)
 
-        period: "hourly"  → 24 hourly bars of `date`'s day
-                "daily"   → daily bars of `date`'s month
-                "monthly" → monthly bars of `date`'s year
-        `date` is "YYYY-MM-DD" (defaults to today). Legacy period names
-        (today/day/week/month/year) are mapped for backward compatibility.
+        items = []
+        for k in sorted(agg):
+            d = agg[k]
+            item = {"label": k}
+            for f in ALL_KEYS:
+                item[f] = _round(f, d[f])
+            item["net_cost"] = round(d["cost"] - d["revenue"], 4)
+            items.append(item)
+
+        totals = {f: _round(f, sum(d[f] for d in agg.values())) for f in ALL_KEYS}
+        totals["net_cost"] = round(totals["cost"] - totals["revenue"], 4)
+        return items, totals
+
+    def get_history(self, period: str = "hourly", date: str | None = None,
+                    start: str | None = None, end: str | None = None) -> dict:
         """
+        Aggregate hourly buckets into bars.
+
+        Range mode (preferred): pass `start` and `end` ("YYYY-MM-DD", inclusive).
+        The bar granularity is chosen from the span — hourly for a single day,
+        daily up to ~10 weeks, monthly beyond.
+
+        Anchor mode (legacy): pass `period` + `date`:
+          "hourly"  → 24 hourly bars of `date`'s day
+          "daily"   → daily bars of `date`'s month
+          "monthly" → monthly bars of `date`'s year
+        """
+        if start and end:
+            return self._range_history(start, end)
+
         legacy = {"today": "hourly", "day": "daily", "week": "daily",
                   "month": "monthly", "year": "monthly"}
         period = legacy.get(period, period)
@@ -164,19 +190,45 @@ class EnergyLogger:
             for k in ALL_KEYS:
                 agg[agg_key][k] += bucket.get(k, 0.0)
 
-        def _round(k, v):
-            return round(v, 4) if k in ("cost", "revenue") else round(v, 3)
-
-        items = []
-        for k in sorted(agg):
-            d = agg[k]
-            item = {"label": k}
-            for f in ALL_KEYS:
-                item[f] = _round(f, d[f])
-            item["net_cost"] = round(d["cost"] - d["revenue"], 4)
-            items.append(item)
-
-        totals = {f: _round(f, sum(d[f] for d in agg.values())) for f in ALL_KEYS}
-        totals["net_cost"] = round(totals["cost"] - totals["revenue"], 4)
-
+        items, totals = self._result_from_agg(agg)
         return {"period": period, "date": anchor, "items": items, "totals": totals}
+
+    def _range_history(self, start: str, end: str) -> dict:
+        """Aggregate buckets between `start` and `end` (inclusive, "YYYY-MM-DD")."""
+        try:
+            s = datetime.strptime(start, "%Y-%m-%d").date()
+            e = datetime.strptime(end, "%Y-%m-%d").date()
+        except ValueError:
+            return {"period": "range", "bucket": "daily", "start": start,
+                    "end": end, "items": [], "totals": {}}
+        if e < s:
+            s, e = e, s
+        span_days = (e - s).days + 1
+        if span_days <= 1:
+            bucket = "hourly"
+        elif span_days <= 70:
+            bucket = "daily"
+        else:
+            bucket = "monthly"
+
+        agg: dict[str, dict] = defaultdict(lambda: {k: 0.0 for k in ALL_KEYS})
+        for key, b in self._data.items():
+            date_part = key[:10]
+            try:
+                d = datetime.strptime(date_part, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if d < s or d > e:
+                continue
+            if bucket == "hourly":
+                agg_key = key[11:13] + ":00"
+            elif bucket == "daily":
+                agg_key = date_part
+            else:
+                agg_key = key[:7]
+            for k in ALL_KEYS:
+                agg[agg_key][k] += b.get(k, 0.0)
+
+        items, totals = self._result_from_agg(agg)
+        return {"period": "range", "bucket": bucket, "start": s.isoformat(),
+                "end": e.isoformat(), "items": items, "totals": totals}
