@@ -302,17 +302,28 @@ class SolarCalibration:
             return
         avg = c["sum"] / c["n"]
         cell = self._key(c["hour"], c["month"])
+        is_new = cell not in self._factors
         old = self._factors.get(cell, 1.0)
         # Always feed the intra-day weather residual (any weather).
         self._accumulate_today(c.get("date"), avg, c["fc"] * old)
-        # Update the long-term structural shading factor ONLY on clear-sky days.
+        ratio = max(CALIB_MIN_RATIO, min(CALIB_MAX_RATIO, avg / c["fc"]))
+        # Bootstrap: a cell that has never been learned starts from the observed
+        # ratio on its first valid day, regardless of the weather. Without this a
+        # house whose whole-day production sits below the clear-sky threshold
+        # (heavy shading, soiling, bad orientation) would read as "cloudy" every
+        # single day and stay stuck at 1.0 forever. Once the cell holds the
+        # structural factor, the clear-sky residual normalises back to ~1 and the
+        # gate below correctly rejects genuinely cloudy days.
+        if is_new:
+            self._factors[cell] = round(ratio, 4)
+            return
+        # Refine the long-term structural shading factor ONLY on clear-sky days.
         residual = self.today_residual(c.get("date"))
         if residual is not None and residual < CALIB_CLEAR_SKY_MIN:
             _LOGGER.debug(
                 "Calib %s skipped (cloudy day, residual=%.2f)", cell, residual
             )
             return
-        ratio = max(CALIB_MIN_RATIO, min(CALIB_MAX_RATIO, avg / c["fc"]))
         self._factors[cell] = round((1 - self._alpha) * old + self._alpha * ratio, 4)
 
     def _accumulate_today(self, date_str, actual_w: float, expected_w: float) -> None:
