@@ -82,6 +82,55 @@ def test_legacy_period_names_still_work(tmp_path):
     assert el.get_history("today")["period"] == "hourly"
 
 
+def test_range_single_day_is_hourly(tmp_path):
+    el = _logger(tmp_path)
+    el._data = {
+        "2026-06-16T10": {"kwh_in": 1.0, "kwh_out": 0.0, "kwh_house": 1.0, "cost": 0.2, "revenue": 0.0},
+        "2026-06-16T11": {"kwh_in": 2.0, "kwh_out": 0.0, "kwh_house": 2.0, "cost": 0.4, "revenue": 0.0},
+        "2026-06-17T10": {"kwh_in": 9.0, "kwh_out": 0.0, "kwh_house": 9.0, "cost": 9.0, "revenue": 0.0},
+    }
+    h = el.get_history(start="2026-06-16", end="2026-06-16")
+    assert h["period"] == "range" and h["bucket"] == "hourly"
+    assert [i["label"] for i in h["items"]] == ["10:00", "11:00"]  # 17th excluded
+    assert h["totals"]["kwh_in"] == 3.0
+
+
+def test_range_week_is_daily(tmp_path):
+    el = _logger(tmp_path)
+    el._data = {
+        "2026-06-15T10": {"kwh_in": 1.0, "kwh_out": 0.0, "kwh_house": 1.0, "cost": 0.0, "revenue": 0.0},
+        "2026-06-17T10": {"kwh_in": 2.0, "kwh_out": 0.0, "kwh_house": 2.0, "cost": 0.0, "revenue": 0.0},
+        "2026-06-25T10": {"kwh_in": 9.0, "kwh_out": 0.0, "kwh_house": 9.0, "cost": 0.0, "revenue": 0.0},
+    }
+    h = el.get_history(start="2026-06-15", end="2026-06-21")
+    assert h["bucket"] == "daily"
+    assert [i["label"] for i in h["items"]] == ["2026-06-15", "2026-06-17"]  # 25th excluded
+    assert h["totals"]["kwh_in"] == 3.0
+
+
+def test_range_year_is_monthly(tmp_path):
+    el = _logger(tmp_path)
+    el._data = {
+        "2026-02-16T10": {"kwh_in": 1.0, "kwh_out": 0.0, "kwh_house": 1.0, "cost": 0.0, "revenue": 0.0},
+        "2026-07-16T10": {"kwh_in": 2.0, "kwh_out": 0.0, "kwh_house": 2.0, "cost": 0.0, "revenue": 0.0},
+        "2025-07-16T10": {"kwh_in": 5.0, "kwh_out": 0.0, "kwh_house": 5.0, "cost": 0.0, "revenue": 0.0},
+    }
+    h = el.get_history(start="2026-01-01", end="2026-12-31")
+    assert h["bucket"] == "monthly"
+    assert [i["label"] for i in h["items"]] == ["2026-02", "2026-07"]  # 2025 excluded
+    assert h["totals"]["kwh_in"] == 3.0
+
+
+def test_range_swaps_reversed_bounds(tmp_path):
+    el = _logger(tmp_path)
+    el._data = {
+        "2026-06-16T10": {"kwh_in": 1.0, "kwh_out": 0.0, "kwh_house": 1.0, "cost": 0.0, "revenue": 0.0},
+    }
+    h = el.get_history(start="2026-06-20", end="2026-06-10")  # reversed
+    assert h["start"] == "2026-06-10" and h["end"] == "2026-06-20"
+    assert h["totals"]["kwh_in"] == 1.0
+
+
 def test_record_energy_tracks_grid_house_solar_battery(tmp_path):
     el = _logger(tmp_path)
     el.record_energy({

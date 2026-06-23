@@ -485,8 +485,11 @@ async def api_epex():
 
 
 @app.get("/api/energy/history")
-async def api_energy_history(period: str = "hourly", date: str = ""):
-    return JSONResponse(_energy_logger.get_history(period, date or None))
+async def api_energy_history(period: str = "hourly", date: str = "",
+                             start: str = "", end: str = ""):
+    return JSONResponse(
+        _energy_logger.get_history(period, date or None, start or None, end or None)
+    )
 
 
 @app.get("/api/forecast")
@@ -800,8 +803,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .day-toggle{display:flex;gap:.4rem}
   .day-btn{padding:.2rem .6rem;border-radius:.4rem;border:1px solid var(--border);background:none;color:var(--muted);cursor:pointer;font-size:.75rem}
   .day-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
-  .hist-controls{display:flex;flex-direction:column;align-items:center;gap:.5rem;margin-bottom:.75rem}
-  .hist-controls-row{display:flex;justify-content:center;align-items:center;gap:.4rem}
   .hist-nav{display:flex;align-items:center;gap:.4rem}
   .hist-date{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:.3rem .5rem;border-radius:.4rem;font-size:.8rem}
   /* HA-style energy period selector */
@@ -813,6 +814,32 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .ha-icon-btn input[type=date]{position:absolute;inset:0;width:100%;height:100%;opacity:0;border:none;cursor:pointer;padding:0}
   .ha-now-btn{padding:.25rem .75rem;border-radius:1rem;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;font-size:.78rem;font-weight:600}
   .ha-now-btn:hover{filter:brightness(1.08)}
+  /* HA-style period bar + calendar popover */
+  .hist-bar{display:flex;align-items:center;justify-content:center;gap:.3rem;background:var(--card);border:1px solid var(--border);border-radius:1.4rem;padding:.25rem .5rem;margin:.75rem auto;width:max-content;max-width:100%;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .hist-range-label{min-width:8rem;text-align:center;font-weight:600;font-size:.95rem;color:var(--text);cursor:pointer;padding:0 .4rem;white-space:nowrap}
+  .hist-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;z-index:1000}
+  .hist-overlay.open{display:flex}
+  .hist-pop{display:flex;background:var(--card);color:var(--text);border-radius:.9rem;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.3);max-width:95vw;max-height:92vh}
+  .hist-presets{display:flex;flex-direction:column;padding:.5rem;border-right:1px solid var(--border);min-width:11rem;overflow:auto}
+  .hist-preset{text-align:left;background:none;border:none;color:var(--text);padding:.5rem .75rem;border-radius:.5rem;cursor:pointer;font-size:.9rem;white-space:nowrap}
+  .hist-preset:hover{background:rgba(127,127,127,.14)}
+  .hist-preset.active{background:var(--accent);color:#fff}
+  .hist-cal{padding:.75rem;min-width:18rem}
+  .cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem}
+  .cal-title{font-weight:600;font-size:.95rem;text-transform:capitalize}
+  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+  .cal-dow{text-align:center;font-size:.7rem;color:var(--muted);padding:.25rem 0;font-weight:600}
+  .cal-day{display:flex;align-items:center;justify-content:center;height:36px;border:none;background:none;color:var(--text);cursor:pointer;font-size:.85rem;border-radius:50%}
+  .cal-day:hover{background:rgba(127,127,127,.16)}
+  .cal-day.muted{color:var(--muted);opacity:.45}
+  .cal-day.in-range{background:rgba(16,185,129,.18);border-radius:0}
+  .cal-day.range-start{background:var(--accent);color:#fff;border-radius:50% 0 0 50%}
+  .cal-day.range-end{background:var(--accent);color:#fff;border-radius:0 50% 50% 0}
+  .cal-day.single{background:var(--accent);color:#fff;border-radius:50%}
+  .cal-actions{display:flex;justify-content:flex-end;gap:.5rem;margin-top:.75rem}
+  .cal-btn-text{background:none;border:none;color:var(--accent);font-weight:600;padding:.4rem .8rem;cursor:pointer;font-size:.9rem}
+  .cal-btn-primary{background:var(--accent);border:none;color:#fff;font-weight:600;padding:.4rem 1.1rem;border-radius:1rem;cursor:pointer;font-size:.9rem}
+  @media(max-width:560px){.hist-pop{flex-direction:column}.hist-presets{flex-direction:row;flex-wrap:wrap;border-right:none;border-bottom:1px solid var(--border);min-width:0}}
   .chart-wrap{position:relative;height:160px;margin-bottom:.5rem}
   .price-table{width:100%;border-collapse:collapse;font-size:.75rem}
   .price-table th{color:var(--muted);font-size:.62rem;text-transform:uppercase;padding:.25rem .4rem;border-bottom:1px solid var(--border);text-align:left;position:sticky;top:0;background:var(--card)}
@@ -1105,26 +1132,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="updated" id="price-updated"></div>
     </div>
   </div>
-  <!-- Global history filter — drives both charts above -->
-  <div class="hist-controls">
-    <div class="hist-controls-row">
-      <button class="day-btn active" data-period="hourly"  data-i18n="p_hour" onclick="setHistPeriod('hourly',this)">Hour</button>
-      <button class="day-btn"        data-period="daily"   data-i18n="p_day"  onclick="setHistPeriod('daily',this)">Day</button>
-      <button class="day-btn"        data-period="monthly" data-i18n="p_year" onclick="setHistPeriod('monthly',this)">Year</button>
-    </div>
-    <div class="ha-period">
-      <button class="ha-icon-btn" title="Select date">
-        <svg viewBox="0 0 24 24"><path d="M19,19H5V8H19M16,1V3H8V1H6V3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3H18V1M17,12H12V17H17V12Z"/></svg>
-        <input type="date" id="histDate" onclick="this.showPicker&&this.showPicker()" onchange="loadEnergyHistory()">
-      </button>
-      <button class="ha-now-btn" data-i18n="now" onclick="histToday()">Now</button>
-      <button class="ha-icon-btn" onclick="stepHist(-1)" title="Previous">
-        <svg viewBox="0 0 24 24"><path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/></svg>
-      </button>
-      <div class="ha-period-label" id="histDateLabel">--</div>
-      <button class="ha-icon-btn" onclick="stepHist(1)" title="Next">
-        <svg viewBox="0 0 24 24"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
-      </button>
+  <!-- Global period filter — drives the cards & both charts above (HA-style) -->
+  <div class="hist-bar">
+    <button class="ha-icon-btn" onclick="openHistPicker()" title="Select period">
+      <svg viewBox="0 0 24 24"><path d="M19,19H5V8H19M16,1V3H8V1H6V3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3H18V1M17,12H12V17H17V12Z"/></svg>
+    </button>
+    <div class="hist-range-label" id="histRangeLabel" onclick="openHistPicker()">--</div>
+    <button class="ha-now-btn" data-i18n="now" onclick="histToday()">Now</button>
+    <button class="ha-icon-btn" onclick="stepHist(-1)" title="Previous">
+      <svg viewBox="0 0 24 24"><path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/></svg>
+    </button>
+    <button class="ha-icon-btn" onclick="stepHist(1)" title="Next">
+      <svg viewBox="0 0 24 24"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- HA-style period popover (presets + calendar range picker) -->
+<div class="hist-overlay" id="histOverlay" onclick="if(event.target===this)closeHistPicker()">
+  <div class="hist-pop">
+    <div class="hist-presets" id="histPresets"></div>
+    <div class="hist-cal">
+      <div class="cal-head">
+        <button class="ha-icon-btn" onclick="calStep(-1)" title="Previous month"><svg viewBox="0 0 24 24"><path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/></svg></button>
+        <div class="cal-title" id="calTitle"></div>
+        <button class="ha-icon-btn" onclick="calStep(1)" title="Next month"><svg viewBox="0 0 24 24"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg></button>
+      </div>
+      <div class="cal-grid" id="calGrid"></div>
+      <div class="cal-actions">
+        <button class="cal-btn-text" onclick="closeHistPicker()" data-i18n="cancel">Cancel</button>
+        <button class="cal-btn-primary" onclick="selectHistRange()" data-i18n="select">Select</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1251,6 +1289,9 @@ const I18N = {
         mode:'Mode', live_readings:'Live readings', decisions:'Decisions', last_reason:'Last decision reason',
         consumption_cost:'Consumption & Cost', consumption_kwh:'Consumption (kWh)', price_paid:'Price paid (€)',
         p_hour:'Hour', p_day:'Day', p_year:'Year',
+        p_today:'Today', p_yesterday:'Yesterday', p_this_week:'This week', p_this_month:'This month',
+        p_this_quarter:'This quarter', p_this_year:'This year', p_last7:'Last 7 days', p_last30:'Last 30 days',
+        p_last365:'Last 365 days', p_last12m:'Last 12 months', cancel:'Cancel', select:'Select', net:'Net',
         epex_prices:'EPEX SPOT prices', forecast_24h:'24h forecast', battery_plan:'24h battery plan',
         self_solar:'Solar self-use', imported:'Imported (kWh)', exported:'Exported (kWh)', cost:'Cost (€)', revenue:'Revenue (€)',
         fc_solar:'Forecast solar (kW)', fc_conso:'Forecast consumption (kW)',
@@ -1265,6 +1306,9 @@ const I18N = {
         mode:'Mode', live_readings:'Mesures en direct', decisions:'Décisions', last_reason:'Dernière décision',
         consumption_cost:'Consommation & Coût', consumption_kwh:'Consommation (kWh)', price_paid:'Prix payé (€)',
         p_hour:'Heure', p_day:'Jour', p_year:'Année',
+        p_today:'Aujourd\\'hui', p_yesterday:'Hier', p_this_week:'Cette semaine', p_this_month:'Ce mois',
+        p_this_quarter:'Ce trimestre', p_this_year:'Cette année', p_last7:'7 derniers jours', p_last30:'30 derniers jours',
+        p_last365:'365 derniers jours', p_last12m:'12 derniers mois', cancel:'Annuler', select:'Sélectionner', net:'Net',
         epex_prices:'Prix EPEX SPOT', forecast_24h:'Prévisions 24h', battery_plan:'Plan batterie 24h',
         self_solar:'Autoconso. solaire', imported:'Importé (kWh)', exported:'Exporté (kWh)', cost:'Coût (€)', revenue:'Revenu (€)',
         fc_solar:'Solaire prévu (kW)', fc_conso:'Conso prévue (kW)',
@@ -2056,8 +2100,44 @@ function renderPowerChart(series) {
 setInterval(loadPowerChart, 10 * 60 * 1000);
 
 // ── Energy history (Consommation & Coût): ONE global period + date for both charts ──
-let _histPeriod = 'hourly', _histDate = '', _kwhChartInst = null, _priceChartInst = null;
+let _histPreset = 'today', _histStart = null, _histEnd = null, _kwhChartInst = null, _priceChartInst = null;
+let _calMonth = null, _calSelStart = null, _calSelEnd = null;
 function _isoDate(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function _parseISO(s){ return new Date(s+'T00:00:00'); }
+function _addDays(d,n){ const x=new Date(d); x.setDate(x.getDate()+n); return x; }
+function _startOfWeek(d){ const x=new Date(d); const wd=(x.getDay()+6)%7; x.setDate(x.getDate()-wd); x.setHours(0,0,0,0); return x; }  // Monday-based
+function _startOfMonth(d){ return new Date(d.getFullYear(),d.getMonth(),1); }
+function _endOfMonth(d){ return new Date(d.getFullYear(),d.getMonth()+1,0); }
+function _startOfQuarter(d){ return new Date(d.getFullYear(),Math.floor(d.getMonth()/3)*3,1); }
+function _endOfQuarter(d){ const s=_startOfQuarter(d); return new Date(s.getFullYear(),s.getMonth()+3,0); }
+const HIST_PRESETS = [
+  ['today','p_today'],['yesterday','p_yesterday'],['week','p_this_week'],['month','p_this_month'],
+  ['quarter','p_this_quarter'],['year','p_this_year'],['last7','p_last7'],['last30','p_last30'],
+  ['last365','p_last365'],['last12m','p_last12m']
+];
+function _presetRange(key){
+  const today=new Date(); today.setHours(0,0,0,0);
+  switch(key){
+    case 'today':     return [today, today];
+    case 'yesterday': { const y=_addDays(today,-1); return [y,y]; }
+    case 'week':      return [_startOfWeek(today), _addDays(_startOfWeek(today),6)];
+    case 'month':     return [_startOfMonth(today), _endOfMonth(today)];
+    case 'quarter':   return [_startOfQuarter(today), _endOfQuarter(today)];
+    case 'year':      return [new Date(today.getFullYear(),0,1), new Date(today.getFullYear(),11,31)];
+    case 'last7':     return [_addDays(today,-6), today];
+    case 'last30':    return [_addDays(today,-29), today];
+    case 'last365':   return [_addDays(today,-364), today];
+    case 'last12m':   return [new Date(today.getFullYear(),today.getMonth()-11,1), today];
+    default:          return [today, today];
+  }
+}
+function _fmtRangeLabel(s,e){
+  const loc=(LANG==='fr'?'fr-FR':undefined);
+  const full={day:'numeric',month:'short',year:'numeric'}, noYear={day:'numeric',month:'short'};
+  if (_isoDate(s)===_isoDate(e)) return s.toLocaleDateString(loc,full);
+  const sameYear = s.getFullYear()===e.getFullYear();
+  return s.toLocaleDateString(loc, sameYear?noYear:full)+' – '+e.toLocaleDateString(loc,full);
+}
 // HA-style centred period label, adapted to the active aggregation level.
 function _fmtPeriodLabel(dateStr, period){
   const d = new Date((dateStr||_isoDate(new Date()))+'T00:00:00');
@@ -2068,16 +2148,14 @@ function _fmtPeriodLabel(dateStr, period){
 }
 function _updateLabel(id, dateStr, period){ const el=document.getElementById(id); if(el) el.textContent=_fmtPeriodLabel(dateStr,period); }
 async function loadEnergyHistory() {
-  const inp = document.getElementById('histDate');
-  if (inp) { if (!inp.value) inp.value = _histDate || _isoDate(new Date()); _histDate = inp.value; }
-  else if (!_histDate) { _histDate = _isoDate(new Date()); }
-  _updateLabel('histDateLabel', _histDate, _histPeriod);
+  if (!_histStart || !_histEnd) { const r=_presetRange(_histPreset); _histStart=r[0]; _histEnd=r[1]; }
+  const lbl=document.getElementById('histRangeLabel'); if(lbl) lbl.textContent=_fmtRangeLabel(_histStart,_histEnd);
   try {
-    const data = await fetch(BASE+'/api/energy/history?period='+_histPeriod+'&date='+_histDate).then(r=>r.json());
+    const data = await fetch(BASE+'/api/energy/history?start='+_isoDate(_histStart)+'&end='+_isoDate(_histEnd)).then(r=>r.json());
     renderKwhChart(data); renderPriceChart(data); renderConsumptionTotals(data.totals || {});
   } catch(e) { const el=document.getElementById('kwh-updated'); if(el) el.textContent=t('error'); }
 }
-function histToday(){ _histDate=_isoDate(new Date()); const inp=document.getElementById('histDate'); if(inp) inp.value=_histDate; _updateLabel('histDateLabel',_histDate,_histPeriod); loadEnergyHistory(); }
+function histToday(){ _histPreset='today'; const r=_presetRange('today'); _histStart=r[0]; _histEnd=r[1]; loadEnergyHistory(); }
 function renderConsumptionTotals(tt) {
   const kwh = v => (v != null ? (+v).toFixed(2) : '--') + ' kWh';
   const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
@@ -2090,26 +2168,71 @@ function renderConsumptionTotals(tt) {
   const eur = v => (v != null ? (+v).toFixed(2) : '--') + ' €';
   set('cs-revenue', eur(tt.revenue));
   set('cs-cost',    eur(tt.cost));
-  const net = tt.net_cost;
-  set('cs-net', (net != null ? (net >= 0 ? '' : '-') + Math.abs(net).toFixed(2) : '--') + ' €');
+  // Net result from the user's point of view: positive = you earn, negative = you pay.
+  const net = tt.net_cost != null ? -tt.net_cost : null;   // net_cost = cost - revenue
+  const sign = v => v > 0 ? '+' : (v < 0 ? '-' : '');
+  set('cs-net', (net != null ? sign(net) + Math.abs(net).toFixed(2) : '--') + ' €');
   const netEl = document.getElementById('cs-net');
-  if (netEl && net != null) netEl.style.color = net > 0 ? '#ef4444' : '#10b981';
-  set('cs-net-sub', net != null && net <= 0 ? t('cs_net_credit') : t('cs_net_sub'));
-}
-function setHistPeriod(period, btn) {
-  _histPeriod = period;
-  document.querySelectorAll('.hist-controls .day-btn[data-period]').forEach(b=>b.classList.toggle('active', b.dataset.period===period));
-  loadEnergyHistory();
+  if (netEl && net != null) netEl.style.color = net >= 0 ? '#10b981' : '#ef4444';
+  set('cs-net-sub', net != null && net >= 0 ? t('cs_net_credit') : t('cs_net_sub'));
 }
 function stepHist(dir) {
-  const inp = document.getElementById('histDate');
-  const base = (inp && inp.value) ? new Date(inp.value+'T00:00:00') : new Date();
-  if (_histPeriod === 'hourly')      base.setDate(base.getDate()+dir);
-  else if (_histPeriod === 'daily')  base.setMonth(base.getMonth()+dir);
-  else                               base.setFullYear(base.getFullYear()+dir);
-  _histDate = _isoDate(base);
-  if (inp) inp.value = _histDate;
+  if (!_histStart || !_histEnd) { const r=_presetRange(_histPreset); _histStart=r[0]; _histEnd=r[1]; }
+  const span = Math.round((_histEnd - _histStart)/86400000) + 1;   // days in the current range
+  _histStart = _addDays(_histStart, dir*span);
+  _histEnd   = _addDays(_histEnd,   dir*span);
+  _histPreset = null;   // shifted off the preset window
   loadEnergyHistory();
+}
+// ── HA-style period popover (presets + calendar range picker) ──
+function openHistPicker(){
+  if (!_histStart || !_histEnd) { const r=_presetRange(_histPreset||'today'); _histStart=r[0]; _histEnd=r[1]; }
+  _calSelStart = new Date(_histStart); _calSelEnd = new Date(_histEnd);
+  _calMonth = _startOfMonth(_histEnd);
+  renderPresets(); renderCal();
+  document.getElementById('histOverlay').classList.add('open');
+}
+function closeHistPicker(){ document.getElementById('histOverlay').classList.remove('open'); }
+function renderPresets(){
+  const wrap=document.getElementById('histPresets'); if(!wrap) return;
+  wrap.innerHTML=HIST_PRESETS.map(p=>'<button class="hist-preset'+(_histPreset===p[0]?' active':'')+'" onclick="applyPreset(\\''+p[0]+'\\')">'+t(p[1])+'</button>').join('');
+}
+function applyPreset(key){
+  _histPreset=key; const r=_presetRange(key); _histStart=r[0]; _histEnd=r[1];
+  closeHistPicker(); loadEnergyHistory();
+}
+function calStep(dir){ _calMonth=new Date(_calMonth.getFullYear(), _calMonth.getMonth()+dir, 1); renderCal(); }
+function renderCal(){
+  const loc=(LANG==='fr'?'fr-FR':undefined);
+  document.getElementById('calTitle').textContent=_calMonth.toLocaleDateString(loc,{month:'long',year:'numeric'});
+  const dow=(LANG==='fr'?['L','M','M','J','V','S','D']:['M','T','W','T','F','S','S']);
+  let html=dow.map(d=>'<div class="cal-dow">'+d+'</div>').join('');
+  const first=_startOfMonth(_calMonth);
+  const gridStart=_addDays(first, -((first.getDay()+6)%7));   // back to Monday
+  const t0=_calSelStart?_calSelStart.getTime():null, t1=_calSelEnd?_calSelEnd.getTime():null;
+  for(let i=0;i<42;i++){
+    const d=_addDays(gridStart,i); const td=d.getTime();
+    let cls='cal-day'+(d.getMonth()===_calMonth.getMonth()?'':' muted');
+    if(t0!=null && t1!=null){
+      if(t0===t1 && td===t0) cls+=' single';
+      else if(td===t0) cls+=' range-start';
+      else if(td===t1) cls+=' range-end';
+      else if(td>t0 && td<t1) cls+=' in-range';
+    } else if(t0!=null && td===t0) cls+=' single';
+    html+='<button class="'+cls+'" onclick="calPick(\\''+_isoDate(d)+'\\')">'+d.getDate()+'</button>';
+  }
+  document.getElementById('calGrid').innerHTML=html;
+}
+function calPick(iso){
+  const d=_parseISO(iso);
+  if(!_calSelStart || _calSelEnd){ _calSelStart=d; _calSelEnd=null; }   // start a new range
+  else if(d < _calSelStart){ _calSelEnd=_calSelStart; _calSelStart=d; }
+  else { _calSelEnd=d; }
+  renderCal();
+}
+function selectHistRange(){
+  if(_calSelStart){ _histStart=_calSelStart; _histEnd=_calSelEnd||_calSelStart; _histPreset=null; }
+  closeHistPicker(); loadEnergyHistory();
 }
 function renderKwhChart(data) {
   if (!data || !data.items) return;
@@ -2157,18 +2280,22 @@ function renderPriceChart(data) {
   const costs    = data.items.map(i=>+(i.cost||0).toFixed(4));
   const revenues = data.items.map(i=>+(i.revenue||0).toFixed(4));
   const negCosts = costs.map(v=>+(-v).toFixed(4));   // cost drawn below the axis
+  // Net per bar (revenue − cost): positive = earned, negative = paid. Sits at the
+  // top of each stacked bar (revenue + (−cost)) on the same € scale.
+  const netLine  = data.items.map((it,i)=>+(revenues[i]-costs[i]).toFixed(4));
   const ctx = document.getElementById('priceChart').getContext('2d');
   if (_priceChartInst) _priceChartInst.destroy();
   _priceChartInst = new Chart(ctx, {
     type:'bar',
     data:{labels,datasets:[
-      {label:t('revenue'), data:revenues, backgroundColor:'rgba(16,185,129,0.75)', borderRadius:2, stack:'p'},
-      {label:t('cost'),    data:negCosts, backgroundColor:'rgba(239,68,68,0.75)',  borderRadius:2, stack:'p'},
+      {type:'bar',  label:t('revenue'), data:revenues, backgroundColor:'rgba(16,185,129,0.75)', borderRadius:2, stack:'p', order:2},
+      {type:'bar',  label:t('cost'),    data:negCosts, backgroundColor:'rgba(239,68,68,0.75)',  borderRadius:2, stack:'p', order:2},
+      {type:'line', label:t('net'),     data:netLine,  borderColor:'#3b82f6', backgroundColor:'#3b82f6', borderWidth:2, pointRadius:2, pointHoverRadius:4, tension:0.3, order:0, stack:'net', fill:false},
     ]},
     options:{
       responsive:true, maintainAspectRatio:false, animation:{duration:400},
       plugins:{ legend:{display:true,labels:{font:{size:10}}},
-                tooltip:{callbacks:{label:c=>` ${c.dataset.label}: ${Math.abs(c.parsed.y).toFixed(4)} €`}} },
+                tooltip:{callbacks:{label:c=>` ${c.dataset.label}: ${(c.dataset.type==='line'?c.parsed.y:Math.abs(c.parsed.y)).toFixed(4)} €`}} },
       scales:{
         x:{stacked:true,ticks:{maxTicksLimit:12,font:{size:9}},grid:{display:false}},
         y:{stacked:true,ticks:{font:{size:9},callback:v=>v.toFixed(3)+' €'}}
@@ -2176,7 +2303,7 @@ function renderPriceChart(data) {
     }
   });
   const el = document.getElementById('price-updated');
-  if (el) { const net=data.totals.net_cost; el.textContent=data.items.length+' '+t('bars')+' · net '+(net>=0?'':'-')+Math.abs(net).toFixed(2)+' €'; }
+  if (el) { const ng=data.totals.net_cost!=null?-data.totals.net_cost:0; el.textContent=data.items.length+' '+t('bars')+' · '+t('net')+' '+(ng>=0?'+':'-')+Math.abs(ng).toFixed(2)+' €'; }
 }
 setInterval(()=>{ if(document.getElementById('page-consumption').classList.contains('active')) loadEnergyHistory(); }, 60000);
 

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.11
+
+### Added
+- **Sélecteur de période façon Home Assistant** (page Consommation) : un popover
+  avec préréglages (Aujourd'hui, Hier, Cette semaine, Ce mois, Ce trimestre,
+  Cette année, 7/30/365 derniers jours, 12 derniers mois) **et** un calendrier de
+  sélection de plage. La granularité des barres s'adapte à la durée (horaire pour
+  un jour, journalière jusqu'à ~10 semaines, mensuelle au-delà). Toute la page
+  (cartes Réseau/Maison/Solaire/Batterie/Revenu/Dépenses/Total **et** les deux
+  graphes) suit la période choisie. Les flèches ◀ ▶ décalent la plage de sa propre
+  durée. Nouveau paramètre d'API `start`/`end` sur `/api/energy/history`.
+- **Courbe « Net » sur le graphe Prix payé** : une ligne (revenu − coût) par barre,
+  sur la même échelle € que les barres revenu/coût.
+
+### Changed
+- **Signe du Total** : le total net est désormais affiché du point de vue de
+  l'utilisateur — **positif quand on gagne** de l'argent (vert), **négatif quand on
+  paie** (rouge), au lieu d'un « coût net » toujours positif.
+
 ## 0.6.10
 
 ### Changed
