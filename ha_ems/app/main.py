@@ -1333,8 +1333,10 @@ function showPage(name) {
   document.querySelectorAll(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.page === name));
   const pg = document.getElementById("page-" + name);
   if (pg) pg.classList.add("active");
-  // Keep the page in the URL hash so a refresh lands on the same tab.
+  // Remember the tab across reloads: the URL hash is lost when HA Ingress
+  // reloads the iframe, so persist to localStorage as well.
   if (location.hash !== "#" + name) location.hash = name;
+  try { localStorage.setItem("ha_ems_tab", name); } catch (e) {}
   if (name === "settings") loadSettings();
   if (name === "live") loadPowerChart();
   if (name === "consumption") loadEnergyHistory();
@@ -2309,7 +2311,8 @@ setInterval(()=>{ if(document.getElementById('page-consumption').classList.conta
 
 // Initial route from the URL hash (so a refresh restores the current tab).
 applyI18n();
-showPage((location.hash || "").replace("#", "") || "live");
+function _savedTab(){ try { return localStorage.getItem("ha_ems_tab") || ""; } catch (e) { return ""; } }
+showPage((location.hash || "").replace("#", "") || _savedTab() || "live");
 </script>
 </body>
 </html>

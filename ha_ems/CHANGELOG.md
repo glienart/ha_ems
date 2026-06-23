@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.12
+
+### Fixed
+- **L'onglet actif est mémorisé** : au rafraîchissement de la page, l'add-on
+  revenait toujours sur « Live » parce que HA Ingress recharge l'iframe sans le
+  `#hash`. L'onglet courant est désormais aussi enregistré dans `localStorage` et
+  restauré au chargement (Live / Consommation / Analyse / Paramètres).
+
 ## 0.6.11
 
 ### Added
