@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.12
+
+### Fixed
+- **L'onglet actif est mémorisé** : au rafraîchissement de la page, l'add-on
+  revenait toujours sur « Live » parce que HA Ingress recharge l'iframe sans le
+  `#hash`. L'onglet courant est désormais aussi enregistré dans `localStorage` et
+  restauré au chargement (Live / Consommation / Analyse / Paramètres).
+- **Amorçage de la calibration solaire (ombrage structurel)** : une cellule
+  (heure × mois) jamais apprise démarrait à 1,0 et n'était mise à jour que les
+  jours de ciel clair (résidu ≥ 0,80). Une maison dont la production journalière
+  reste sous ce seuil (ombrage marqué, salissures, mauvaise orientation) était
+  lue comme « nuageuse » chaque jour et restait bloquée à 1,0 indéfiniment.
+  Désormais une cellule neuve est **amorcée** dès la première journée valide à
+  partir du ratio observé (quelle que soit la météo) ; une fois la cellule
+  renseignée, le résidu ciel-clair redevient ~1 et le filtre rejette correctement
+  les vraies journées nuageuses.
+
 ## 0.6.11
 
 ### Added
