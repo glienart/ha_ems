@@ -184,6 +184,20 @@ class ConsumptionHistory:
             result[future.strftime("%Y-%m-%dT%H:00")] = round(avg, 1)
         return result
 
+    def forecast_day_kwh(self, d: datetime) -> float:
+        """Total forecast house consumption (kWh) for the calendar day of `d`,
+        summing the per-hour-of-week averages over its 24 hours.
+
+        Used to record a stable full-day consumption forecast for the
+        "Réel vs Prévisionnel" comparison chart.
+        """
+        total_w = 0.0
+        for h in range(24):
+            key = d.weekday() * 24 + h
+            readings = self._data.get(key, [])
+            total_w += sum(w for _, w in readings) / len(readings) if readings else 500.0
+        return round(total_w / 1000.0, 3)
+
     @property
     def has_enough_data(self) -> bool:
         """True once we have at least ~100 readings (roughly 1–2 h of data)."""

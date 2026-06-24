@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from . import ha_client, settings as settings_module
 from .energy_html import ENERGY_HTML
 from .energy_log import EnergyLogger
+from .forecast_log import ForecastLog
 from .epex import fetch_prices, resolve_zone
 from .optimizer import EmsOptimizer, EmsSnapshot, EvSnapshot
 from .forecast import fetch_solar_forecast, ConsumptionHistory, SolarCalibration, is_daylight, solar_window
@@ -49,6 +50,7 @@ SOLAR_REFRESH_INTERVAL = timedelta(hours=2)
 _consumption_history: ConsumptionHistory = ConsumptionHistory()
 _solar_calib: SolarCalibration = SolarCalibration()
 _energy_logger: EnergyLogger = EnergyLogger()
+_forecast_logger: ForecastLog = ForecastLog()
 _meter_last: dict = {}   # role -> last cumulative kWh reading (for meter deltas)
 _schedule_task: Optional[asyncio.Task] = None
 
@@ -116,6 +118,7 @@ async def lifespan(app: FastAPI):
         _consumption_history.save()
         _solar_calib.save()
         _energy_logger.flush()
+        _forecast_logger.flush()
     except Exception as exc:
         _LOGGER.error("Shutdown flush error: %s", exc)
     _LOGGER.info("EMS loops stopped")
@@ -213,6 +216,33 @@ async def rebuild_schedule() -> None:
         _LOGGER.info("24h schedule built: %d slots", len(_schedule))
     except Exception as exc:
         _LOGGER.error("Schedule build error: %s", exc)
+    # Snapshot a stable full calendar-day forecast (solar + consumption) so the
+    # "Réel vs Prévisionnel" chart can compare actuals over a date range.
+    try:
+        daily_fc = _daily_forecast_totals(calibrated_solar)
+        if daily_fc:
+            _forecast_logger.update(daily_fc)
+    except Exception as exc:
+        _LOGGER.error("Forecast log update error: %s", exc)
+
+
+def _daily_forecast_totals(solar_forecast_w: dict) -> dict:
+    """Build {date: {"solar_kwh", "house_kwh"}} from the calibrated solar
+    forecast (full-day hourly watts from Forecast.Solar) and the consumption
+    history's per-hour-of-week averages."""
+    by_day: dict[str, float] = {}
+    for hour_key, w in solar_forecast_w.items():
+        day = hour_key[:10]                       # "YYYY-MM-DD"
+        by_day[day] = by_day.get(day, 0.0) + float(w) / 1000.0   # Wh → kWh
+    out: dict[str, dict] = {}
+    for day, solar_kwh in by_day.items():
+        try:
+            d = datetime.strptime(day, "%Y-%m-%d")
+        except ValueError:
+            continue
+        out[day] = {"solar_kwh": round(solar_kwh, 3),
+                    "house_kwh": _consumption_history.forecast_day_kwh(d)}
+    return out
 
 
 async def schedule_loop():
@@ -224,6 +254,7 @@ async def schedule_loop():
             _consumption_history.save()  # persist rolling history each cycle
             _solar_calib.save()          # persist learned solar correction factors
             _energy_logger.flush()       # ensure energy log is on disk
+            _forecast_logger.flush()     # ensure forecast snapshots are on disk
         except asyncio.CancelledError:
             break
         except Exception as exc:
@@ -518,6 +549,61 @@ async def api_forecast():
             "today_factor": _solar_calib.today_factor,
         },
     })
+
+
+@app.get("/api/analysis/comparison")
+async def api_analysis_comparison(start: str = "", end: str = "", date: str = ""):
+    """Réel vs Prévisionnel over a date range.
+
+    Real solar/consumption come from the energy log (bucket granularity chosen
+    from the span: hourly for one day, daily up to ~10 weeks, monthly beyond).
+    Forecast comes from the live 24h plan (single day = today) or, for multi-day
+    buckets, from the persisted daily forecast snapshots. Buckets without a
+    forecast snapshot return null and simply show no forecast line.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    if not (start and end):
+        start = end = (date or today)
+    real = _energy_logger.get_history(start=start, end=end)
+    bucket = real.get("bucket", "daily")
+    r_start, r_end = real.get("start", start), real.get("end", end)
+    items = real.get("items", [])
+
+    fc_map: dict[str, dict] = {}
+    if bucket == "hourly":
+        # Single day: the live plan only describes today's hours.
+        if r_start == today and _schedule:
+            for s in _schedule:
+                if s.hour.strftime("%Y-%m-%d") == r_start:
+                    fc_map[s.hour.strftime("%H:00")] = {
+                        "solar": round(s.solar_forecast_w / 1000.0, 3),
+                        "house": round(s.consumption_forecast_w / 1000.0, 3),
+                    }
+    elif bucket == "daily":
+        for day, rec in _forecast_logger.get_range(r_start, r_end).items():
+            fc_map[day] = {"solar": rec.get("solar_kwh"), "house": rec.get("house_kwh")}
+    else:  # monthly
+        agg: dict[str, dict] = {}
+        for day, rec in _forecast_logger.get_range(r_start, r_end).items():
+            m = agg.setdefault(day[:7], {"solar": 0.0, "house": 0.0})
+            m["solar"] += rec.get("solar_kwh") or 0.0
+            m["house"] += rec.get("house_kwh") or 0.0
+        fc_map = {m: {"solar": round(v["solar"], 3), "house": round(v["house"], 3)}
+                  for m, v in agg.items()}
+
+    out_items = []
+    for it in items:
+        f = fc_map.get(it["label"])
+        out_items.append({
+            "label": it["label"],
+            "kwh_solar": it.get("kwh_solar", 0.0),
+            "kwh_house": it.get("kwh_house", 0.0),
+            "fc_solar": f["solar"] if f else None,
+            "fc_house": f["house"] if f else None,
+        })
+    has_forecast = any(i["fc_solar"] is not None for i in out_items)
+    return JSONResponse({"bucket": bucket, "start": r_start, "end": r_end,
+                         "items": out_items, "has_forecast": has_forecast})
 
 
 @app.get("/api/power_history")
@@ -1230,17 +1316,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <!-- Réel vs Prévisionnel -->
   <div style="display:flex;flex-direction:column;align-items:center;gap:.5rem;margin-top:.75rem;margin-bottom:.3rem">
     <div class="section-title" style="margin:0" data-i18n="real_vs_fc">R&eacute;el vs Pr&eacute;visionnel</div>
-    <div class="ha-period">
-      <button class="ha-icon-btn" title="Select date">
+    <div class="hist-bar">
+      <button class="ha-icon-btn" onclick="openPicker('analysis')" title="Select period">
         <svg viewBox="0 0 24 24"><path d="M19,19H5V8H19M16,1V3H8V1H6V3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3H18V1M17,12H12V17H17V12Z"/></svg>
-        <input type="date" id="analysisDate" onclick="this.showPicker&&this.showPicker()" onchange="loadAnalysisComparison()">
       </button>
+      <div class="hist-range-label" id="analysisRangeLabel" onclick="openPicker('analysis')">--</div>
       <button class="ha-now-btn" data-i18n="now" onclick="analysisToday()">Now</button>
-      <button class="ha-icon-btn" onclick="stepAnalysisDate(-1)" title="Previous">
+      <button class="ha-icon-btn" onclick="stepAnalysis(-1)" title="Previous">
         <svg viewBox="0 0 24 24"><path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/></svg>
       </button>
-      <div class="ha-period-label" id="analysisDateLabel">--</div>
-      <button class="ha-icon-btn" onclick="stepAnalysisDate(1)" title="Next">
+      <button class="ha-icon-btn" onclick="stepAnalysis(1)" title="Next">
         <svg viewBox="0 0 24 24"><path d="M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z"/></svg>
       </button>
     </div>
@@ -1301,7 +1386,8 @@ const I18N = {
         calib_learn:'solar calibration learning…', calib_home:'home calibration', calib_cells:'cells learned', calib_today:'today',
         cs_grid:'Grid', cs_house:'House', cs_solar:'Solar', cs_battery:'Battery', cs_consumed:'consumed', cs_produced:'produced',
         cs_revenue:'Revenue', cs_cost:'Expenses', cs_net:'Total', cs_exported_rev:'exported', cs_imported_cost:'imported', cs_net_sub:'net cost', cs_net_credit:'net credit', now:'Now',
-        bars:'bars', error:'Error', real_vs_fc:'Real vs Forecast', real_solar:'Solar (actual)', real_conso:'Consumption (actual)' },
+        bars:'bars', error:'Error', real_vs_fc:'Real vs Forecast', real_solar:'Solar (actual)', real_conso:'Consumption (actual)',
+        fc_solar_e:'Solar (forecast)', fc_conso_e:'Consumption (forecast)', no_fc_yet:'no forecast snapshot for this period yet' },
   fr: { tab_live:'Live', tab_consumption:'Consommation', tab_analysis:'Analyse',
         mode:'Mode', live_readings:'Mesures en direct', decisions:'Décisions', last_reason:'Dernière décision',
         consumption_cost:'Consommation & Coût', consumption_kwh:'Consommation (kWh)', price_paid:'Prix payé (€)',
@@ -1318,7 +1404,8 @@ const I18N = {
         calib_learn:'calibration solaire en apprentissage…', calib_home:'calibration maison', calib_cells:'cellules apprises', calib_today:'aujourd\\'hui',
         cs_grid:'Réseau', cs_house:'Maison', cs_solar:'Solaire', cs_battery:'Batterie', cs_consumed:'consommé', cs_produced:'produit',
         cs_revenue:'Revenu', cs_cost:'Dépenses', cs_net:'Total', cs_exported_rev:'exporté', cs_imported_cost:'importé', cs_net_sub:'coût net', cs_net_credit:'crédit net', now:'Auj.',
-        bars:'barres', error:'Erreur', real_vs_fc:'Réel vs Prévisionnel', real_solar:'Solaire (réel)', real_conso:'Consommation (réelle)' },
+        bars:'barres', error:'Erreur', real_vs_fc:'Réel vs Prévisionnel', real_solar:'Solaire (réel)', real_conso:'Consommation (réelle)',
+        fc_solar_e:'Solaire (prévu)', fc_conso_e:'Conso (prévue)', no_fc_yet:'pas encore de prévision enregistrée sur cette période' },
 };
 const LANG = (function(){ try { const l=(window.parent.document.documentElement.lang||navigator.language||'en').slice(0,2).toLowerCase(); return I18N[l]?l:'en'; } catch(e){ return 'en'; } })();
 function t(k){ return (I18N[LANG] && I18N[LANG][k]) || I18N.en[k] || k; }
@@ -1908,53 +1995,45 @@ function renderForecast(d) {
 }
 setInterval(function(){ if(document.getElementById('page-analysis').classList.contains('active')) loadForecast(); }, 5*60*1000);
 
-// ── Analysis: Réel vs Prévisionnel ──
-let _analysisDate = '', _comparisonChartInst = null;
+// ── Analysis: Réel vs Prévisionnel (HA-style period range) ──
+let _anaPreset = 'today', _anaStart = null, _anaEnd = null, _comparisonChartInst = null;
 
 async function loadAnalysisComparison() {
-  const inp = document.getElementById('analysisDate');
-  if (inp) { if (!inp.value) inp.value = _analysisDate || _isoDate(new Date()); _analysisDate = inp.value; }
-  else if (!_analysisDate) _analysisDate = _isoDate(new Date());
-  _updateLabel('analysisDateLabel', _analysisDate, 'hourly');
-  const today = _isoDate(new Date());
+  if (!_anaStart || !_anaEnd) { const r=_presetRange(_anaPreset||'today'); _anaStart=r[0]; _anaEnd=r[1]; }
+  const lbl=document.getElementById('analysisRangeLabel'); if(lbl) lbl.textContent=_fmtRangeLabel(_anaStart,_anaEnd);
   try {
-    const hist = await fetch(BASE+'/api/energy/history?period=hourly&date='+_analysisDate).then(r=>r.json());
-    // forecast only makes sense for today (it's always the current 24h plan)
-    const fc = (_analysisDate === today && _forecastData) ? _forecastData : null;
-    renderComparisonChart(hist, fc);
+    const data = await fetch(BASE+'/api/analysis/comparison?start='+_isoDate(_anaStart)+'&end='+_isoDate(_anaEnd)).then(r=>r.json());
+    renderComparisonChart(data);
   } catch(e) { const el=document.getElementById('comparison-updated'); if(el) el.textContent=t('error'); }
 }
-
-function stepAnalysisDate(dir) {
-  const inp = document.getElementById('analysisDate');
-  const base = (inp && inp.value) ? new Date(inp.value+'T00:00:00') : new Date();
-  base.setDate(base.getDate() + dir);
-  _analysisDate = _isoDate(base);
-  if (inp) inp.value = _analysisDate;
+function analysisToday(){ _anaPreset='today'; const r=_presetRange('today'); _anaStart=r[0]; _anaEnd=r[1]; loadAnalysisComparison(); }
+function stepAnalysis(dir) {
+  if (!_anaStart || !_anaEnd) { const r=_presetRange(_anaPreset); _anaStart=r[0]; _anaEnd=r[1]; }
+  const span = Math.round((_anaEnd - _anaStart)/86400000) + 1;   // days in the current range
+  _anaStart = _addDays(_anaStart, dir*span);
+  _anaEnd   = _addDays(_anaEnd,   dir*span);
+  _anaPreset = null;
   loadAnalysisComparison();
 }
-function analysisToday(){ _analysisDate=_isoDate(new Date()); const inp=document.getElementById('analysisDate'); if(inp) inp.value=_analysisDate; _updateLabel('analysisDateLabel',_analysisDate,'hourly'); loadAnalysisComparison(); }
 
-function renderComparisonChart(hist, fc) {
+function renderComparisonChart(data) {
   const ctx = document.getElementById('comparisonChart');
   if (!ctx || typeof Chart === 'undefined') return;
-  const items = (hist && hist.items) || [];
+  const items = (data && data.items) || [];
   const labels = items.map(i => i.label);
   const realSolar = items.map(i => +((i.kwh_solar||0)).toFixed(3));
   const realConso = items.map(i => +((i.kwh_house||0)).toFixed(3));
+  const fcSolar = items.map(i => i.fc_solar==null ? null : +(i.fc_solar).toFixed(3));
+  const fcConso = items.map(i => i.fc_house==null ? null : +(i.fc_house).toFixed(3));
+  const hasFc = !!(data && data.has_forecast);
 
   const datasets = [];
   datasets.push({ label: t('real_solar'), data: realSolar, type:'bar', backgroundColor:'rgba(255,152,0,0.55)', borderRadius:2, yAxisID:'y', order:2 });
   datasets.push({ label: t('real_conso'), data: realConso, type:'bar', backgroundColor:'rgba(124,77,255,0.55)', borderRadius:2, yAxisID:'y', order:2 });
 
-  if (fc && fc.schedule && fc.schedule.length) {
-    // Build a map label→forecast for easy alignment
-    const fcMap = {};
-    for (const s of fc.schedule) fcMap[s.hour_label] = s;
-    const fcSolar = labels.map(l => fcMap[l] ? +((fcMap[l].solar_w||0)/1000).toFixed(3) : null);
-    const fcConso = labels.map(l => fcMap[l] ? +((fcMap[l].consumption_w||0)/1000).toFixed(3) : null);
-    datasets.push({ label: t('fc_solar'), data: fcSolar, type:'line', borderColor:'rgba(255,152,0,1)', backgroundColor:'transparent', pointRadius:2, borderWidth:1.5, borderDash:[5,3], yAxisID:'y', order:1, spanGaps:true });
-    datasets.push({ label: t('fc_conso'), data: fcConso, type:'line', borderColor:'rgba(124,77,255,1)', backgroundColor:'transparent', pointRadius:2, borderWidth:1.5, borderDash:[5,3], yAxisID:'y', order:1, spanGaps:true });
+  if (hasFc) {
+    datasets.push({ label: t('fc_solar_e'), data: fcSolar, type:'line', borderColor:'rgba(255,152,0,1)', backgroundColor:'transparent', pointRadius:2, borderWidth:1.5, borderDash:[5,3], yAxisID:'y', order:1, spanGaps:true });
+    datasets.push({ label: t('fc_conso_e'), data: fcConso, type:'line', borderColor:'rgba(124,77,255,1)', backgroundColor:'transparent', pointRadius:2, borderWidth:1.5, borderDash:[5,3], yAxisID:'y', order:1, spanGaps:true });
   }
 
   if (_comparisonChartInst) _comparisonChartInst.destroy();
@@ -1972,10 +2051,7 @@ function renderComparisonChart(hist, fc) {
     }
   });
   const el = document.getElementById('comparison-updated');
-  if (el) {
-    const isToday = _analysisDate === _isoDate(new Date());
-    el.textContent = _analysisDate + (fc ? ' · ' + t('forecast_24h') : '') + (isToday && !fc ? ' · '+t('solar_fc_off') : '');
-  }
+  if (el) el.textContent = _fmtRangeLabel(_anaStart,_anaEnd) + (hasFc ? '' : ' · '+t('no_fc_yet'));
 }
 
 // POWER HISTORY CHART
@@ -2187,21 +2263,36 @@ function stepHist(dir) {
   loadEnergyHistory();
 }
 // ── HA-style period popover (presets + calendar range picker) ──
-function openHistPicker(){
-  if (!_histStart || !_histEnd) { const r=_presetRange(_histPreset||'today'); _histStart=r[0]; _histEnd=r[1]; }
-  _calSelStart = new Date(_histStart); _calSelEnd = new Date(_histEnd);
-  _calMonth = _startOfMonth(_histEnd);
+// Shared by the Consumption ('hist') and Analysis ('analysis') period bars.
+const PICK = {
+  hist:     { get:()=>[_histStart,_histEnd], set:(s,e)=>{_histStart=s;_histEnd=e;},
+              preset:()=>_histPreset, setPreset:k=>{_histPreset=k;},
+              load:()=>loadEnergyHistory(), label:'histRangeLabel' },
+  analysis: { get:()=>[_anaStart,_anaEnd],   set:(s,e)=>{_anaStart=s;_anaEnd=e;},
+              preset:()=>_anaPreset,  setPreset:k=>{_anaPreset=k;},
+              load:()=>loadAnalysisComparison(), label:'analysisRangeLabel' },
+};
+let _pickCtx = 'hist';
+function openPicker(ctx){
+  _pickCtx = ctx in PICK ? ctx : 'hist';
+  const p = PICK[_pickCtx];
+  let [s,e] = p.get();
+  if (!s || !e) { const r=_presetRange(p.preset()||'today'); s=r[0]; e=r[1]; p.set(s,e); }
+  _calSelStart = new Date(s); _calSelEnd = new Date(e);
+  _calMonth = _startOfMonth(e);
   renderPresets(); renderCal();
   document.getElementById('histOverlay').classList.add('open');
 }
+function openHistPicker(){ openPicker('hist'); }   // back-compat (Consumption bar)
 function closeHistPicker(){ document.getElementById('histOverlay').classList.remove('open'); }
 function renderPresets(){
   const wrap=document.getElementById('histPresets'); if(!wrap) return;
-  wrap.innerHTML=HIST_PRESETS.map(p=>'<button class="hist-preset'+(_histPreset===p[0]?' active':'')+'" onclick="applyPreset(\\''+p[0]+'\\')">'+t(p[1])+'</button>').join('');
+  const cur=PICK[_pickCtx].preset();
+  wrap.innerHTML=HIST_PRESETS.map(p=>'<button class="hist-preset'+(cur===p[0]?' active':'')+'" onclick="applyPreset(\\''+p[0]+'\\')">'+t(p[1])+'</button>').join('');
 }
 function applyPreset(key){
-  _histPreset=key; const r=_presetRange(key); _histStart=r[0]; _histEnd=r[1];
-  closeHistPicker(); loadEnergyHistory();
+  const p=PICK[_pickCtx]; p.setPreset(key); const r=_presetRange(key); p.set(r[0],r[1]);
+  closeHistPicker(); p.load();
 }
 function calStep(dir){ _calMonth=new Date(_calMonth.getFullYear(), _calMonth.getMonth()+dir, 1); renderCal(); }
 function renderCal(){
@@ -2233,8 +2324,9 @@ function calPick(iso){
   renderCal();
 }
 function selectHistRange(){
-  if(_calSelStart){ _histStart=_calSelStart; _histEnd=_calSelEnd||_calSelStart; _histPreset=null; }
-  closeHistPicker(); loadEnergyHistory();
+  const p=PICK[_pickCtx];
+  if(_calSelStart){ p.set(_calSelStart, _calSelEnd||_calSelStart); p.setPreset(null); }
+  closeHistPicker(); p.load();
 }
 function renderKwhChart(data) {
   if (!data || !data.items) return;

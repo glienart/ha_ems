@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.13
+
+### Added
+- **« Réel vs Prévisionnel » sur une plage de dates** (page Analyse) : le graphe
+  comparatif utilise désormais le même sélecteur de période façon Home Assistant
+  que la page Consommation (préréglages + calendrier de plage, flèches ◀ ▶,
+  bouton **Maintenant**). La granularité s'adapte à la durée : **horaire** pour un
+  seul jour (courbes solaire/conso réelles + prévision du plan 24h du jour),
+  **journalière** jusqu'à ~10 semaines et **mensuelle** au-delà (barres réelles +
+  prévision agrégée). Nouvel endpoint `/api/analysis/comparison?start=&end=`.
+- **Historique des prévisions** : l'add-on enregistre chaque cycle un instantané
+  *journalier* de la prévision (solaire calibré + consommation) dans
+  `/data/forecast_log.json`, ce qui permet de comparer réel et prévisionnel sur
+  les jours passés. Les jours antérieurs à cette version n'ont pas d'instantané et
+  s'affichent sans courbe de prévision.
+
 ## 0.6.12
 
 ### Fixed
